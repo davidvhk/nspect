@@ -1,0 +1,15 @@
+Source: nspect
+Section: utils
+Priority: optional
+Maintainer: David Vanhoucke <vanhouckedavid@gmail.com>
+Build-Depends: debhelper-compat (= 13), golang-go
+Standards-Version: 4.6.2
+Homepage: https://github.com/david/nspect
+
+Package: nspect
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Linux Capability & Namespace Auditor
+ nspect is a lightweight, zero-dependency Go tool designed to audit
+ namespace isolation, capabilities, writeable mounts, environment
+ variable passwords/secrets, socket configurations, and file descriptor limits.

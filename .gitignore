@@ -1,0 +1,18 @@
+# Compiled binary
+nspect
+container-check
+
+# Temporary build folder
+build/
+
+# Package installers
+*.deb
+*.rpm
+
+# Test and run logs
+*.log
+
+# Editor configurations
+.idea/
+.vscode/
+.DS_Store
