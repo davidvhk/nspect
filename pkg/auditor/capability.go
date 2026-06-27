@@ -184,9 +184,11 @@ func ParseCapabilityMask(maskHex string) ([]string, error) {
 	}
 
 	var caps []string
-	for bit, name := range CapabilityMap {
+	for bit := 0; bit <= 63; bit++ {
 		if (val & (1 << uint(bit))) != 0 {
-			caps = append(caps, name)
+			if name, ok := CapabilityMap[bit]; ok {
+				caps = append(caps, name)
+			}
 		}
 	}
 	return caps, nil

@@ -138,6 +138,25 @@ func AuditMounts(pid int) (*MountAuditResult, error) {
 		return nil, fmt.Errorf("failed to read mountinfo: %w", err)
 	}
 
+	// Read LSM profile to check if it restricts writes to /sys and /proc paths
+	lsmProfile := "none"
+	lsmPath := util.ProcPath(pid, "attr", "current")
+	lsmData, err := os.ReadFile(lsmPath)
+	if err == nil {
+		profile := strings.TrimSpace(string(lsmData))
+		if profile != "" {
+			lsmProfile = profile
+		}
+	}
+
+	lsmRestrictsWrites := false
+	if lsmProfile != "none" && lsmProfile != "unconfined" && !strings.Contains(lsmProfile, "unconfined") && !strings.Contains(lsmProfile, "(complain)") {
+		// AppArmor / SELinux active and enforcing
+		if !strings.Contains(lsmProfile, "spc_t") {
+			lsmRestrictsWrites = true
+		}
+	}
+
 	var risks []MountRisk
 	scoreReduction := 0
 
@@ -172,26 +191,45 @@ func AuditMounts(pid int) (*MountAuditResult, error) {
 		// 2. Sensitive paths (procfs, sysfs, hosts/devs)
 		if isRW {
 			if m.MountPoint == "/proc" || strings.HasPrefix(m.MountPoint, "/proc/") {
-				// Writable /proc is extremely dangerous
-				// Check if it's a specific subpath that is ok, but generally proc should be read-only or masked
-				risks = append(risks, MountRisk{
-					MountPoint:  m.MountPoint,
-					MountSource: m.MountSource,
-					FSType:      m.FSType,
-					RiskLevel:   "Critical",
-					Description: "Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.",
-				})
-				scoreReduction += 35
+				// Writable /proc is extremely dangerous unless protected by LSM
+				if lsmRestrictsWrites {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Info",
+						Description: fmt.Sprintf("Writable /proc filesystem mount detected, but write access is restricted by the active LSM profile (%s), preventing security exposure.", lsmProfile),
+					})
+				} else {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Critical",
+						Description: "Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.",
+					})
+					scoreReduction += 35
+				}
 			} else if m.MountPoint == "/sys" || strings.HasPrefix(m.MountPoint, "/sys/") {
-				// Writable /sys
-				risks = append(risks, MountRisk{
-					MountPoint:  m.MountPoint,
-					MountSource: m.MountSource,
-					FSType:      m.FSType,
-					RiskLevel:   "Critical",
-					Description: "Writable /sys filesystem. Allows direct manipulation of kernel interfaces, cgroup configs, device configurations, or loading modules/drivers.",
-				})
-				scoreReduction += 35
+				// Writable /sys is extremely dangerous unless protected by LSM
+				if lsmRestrictsWrites {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Info",
+						Description: fmt.Sprintf("Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (%s), preventing security exposure.", lsmProfile),
+					})
+				} else {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Critical",
+						Description: "Writable /sys filesystem. Allows direct manipulation of kernel interfaces, cgroup configs, device configurations, or loading modules/drivers.",
+					})
+					scoreReduction += 35
+				}
 			} else if m.MountPoint == "/dev" || m.FSType == "devtmpfs" {
 				risks = append(risks, MountRisk{
 					MountPoint:  m.MountPoint,

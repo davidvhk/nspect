@@ -115,65 +115,111 @@ Running `nspect` prints a comprehensive isolation dashboard:
 
 ```text
 === LINUX CONTAINER & SANDBOX AUDIT REPORT ===
-Target Process: sleep (PID: 371399)
-Command Line:  sleep 300
-Security Score: 41/100
+Target Process: snapd-desktop-i (PID: 2742)
+Command Line:  /snap/snapd-desktop-integration/361/usr/bin/snapd-desktop-integration
+Security Score: 65/100
 ------------------------------------------------------------
 
-[1] NAMESPACE ISOLATION (Score: 95/100)
-  - cgroup   : SHARED WITH HOST (Target Inode: 4026533862)
+[1] NAMESPACE ISOLATION (Score: 15/100)
+  - cgroup   : SHARED WITH HOST (Target Inode: 4026531835)
     Risk: Shares cgroup namespace with host. May leak host cgroup layout information.
-  - ipc      : ISOLATED (Target Inode: 4026536084)
-  - mnt      : ISOLATED (Target Inode: 4026535997)
-  - net      : ISOLATED (Target Inode: 4026536087)
-  - pid      : ISOLATED (Target Inode: 4026536086)
-  - user     : ISOLATED (Target Inode: 4026535996)
-  - uts      : ISOLATED (Target Inode: 4026536023)
+  - ipc      : SHARED WITH HOST (Target Inode: 4026531839)
+    Risk: Shares IPC namespace with host. The container can access host shared memory, semaphores, and message queues.
+  - mnt      : ISOLATED (Target Inode: 4026532885)
+  - net      : SHARED WITH HOST (Target Inode: 4026531840)
+    Risk: Shares Network namespace with host. The container shares host interfaces, socket tables, and can sniff network traffic.
+  - pid      : SHARED WITH HOST (Target Inode: 4026531836)
+    Risk: Shares PID namespace with host. The container can view, trace, and terminate host processes.
+  - user     : SHARED WITH HOST (Target Inode: 4026531837)
+    Risk: Shares User namespace with host. No UID/GID virtualization is active.
+  - uts      : SHARED WITH HOST (Target Inode: 4026531838)
+    Risk: Shares UTS namespace with host. The container shares the host hostname, allowing modification.
   - time     : SHARED WITH HOST (Target Inode: 4026531834)
     Risk: Shares time namespace with host.
 
-[2] PROCESS SECURITY CONTEXT (Score: 65/100)
-  - User Context : UID=2005, EUID=2005
+[2] PROCESS SECURITY CONTEXT (Score: 85/100)
+  - User Context : UID=1000, EUID=1000
   - Seccomp      : Enabled (Filter)
   - NoNewPrivs   : No
-  - LSM Status   : unconfined
+  - LSM Status   : snap.snapd-desktop-integration.snapd-desktop-integration (enforce)
   Hardening Issues Identified:
     * NoNewPrivs flag is not set. Subprocesses can gain new privileges via SUID binaries or file capabilities.
-    * AppArmor/SELinux profile is unconfined or disabled. The process lacks mandatory access controls (MAC).
 
 [3] LINUX CAPABILITIES (Score: 100/100)
   - Effective Capabilities: [None / Dropped]
   - No critical capabilities found in active set.
 
-[4] MOUNT & VOLUME EXPOSURE (Score: 0/100)
-  - Total Mount Points Evaluated: 47
+[4] MOUNT & VOLUME EXPOSURE (Score: 44/100)
+  - Total Mount Points Evaluated: 1329
   Mount Exposures Discovered:
-    * Low  /dev/mapper/pve-vm--116--disk--0 -> Mounted at / (ext4)
-      Description: Root filesystem is mounted read-write.
-    * Critical  proc -> Mounted at /proc (proc)
-      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
-    * Critical  sysfs -> Mounted at /sys (sysfs)
-      Description: Writable /sys filesystem. Allows direct manipulation of kernel interfaces, cgroup configs, or loading modules/drivers.
+    * Low none -> Mounted at / (tmpfs)
+      Description: Root filesystem is mounted read-write. Hardened containers should utilize a read-only root filesystem with ephemeral tmpfs volumes where writing is needed.
+    * High udev -> Mounted at /dev (devtmpfs)
+      Description: Writable /dev or devtmpfs. Allows processes (with CAP_MKNOD or raw device write) to create raw physical drive nodes (e.g. sda) and read/write host filesystems directly.
+    * Low tmpfs -> Mounted at /dev/shm (tmpfs)
+      Description: Writable directory /dev/shm is missing hardening flags: noexec. An attacker can write and execute files or construct SUID payloads here.
+    * Info proc -> Mounted at /proc (proc)
+      Description: Writable /proc filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info systemd-1 -> Mounted at /proc/sys/fs/binfmt_misc (autofs)
+      Description: Writable /proc filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info binfmt_misc -> Mounted at /proc/sys/fs/binfmt_misc (binfmt_misc)
+      Description: Writable /proc filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info sysfs -> Mounted at /sys (sysfs)
+      Description: Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info securityfs -> Mounted at /sys/kernel/security (securityfs)
+      Description: Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info cgroup2 -> Mounted at /sys/fs/cgroup (cgroup2)
+      Description: Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info pstore -> Mounted at /sys/fs/pstore (pstore)
+      Description: Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info efivarfs -> Mounted at /sys/firmware/efi/efivars (efivarfs)
+      Description: Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info bpf -> Mounted at /sys/fs/bpf (bpf)
+      Description: Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info debugfs -> Mounted at /sys/kernel/debug (debugfs)
+      Description: Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info tracefs -> Mounted at /sys/kernel/tracing (tracefs)
+      Description: Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info configfs -> Mounted at /sys/kernel/config (configfs)
+      Description: Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Info fusectl -> Mounted at /sys/fs/fuse/connections (fusectl)
+      Description: Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (snap.snapd-desktop-integration.snapd-desktop-integration (enforce)), preventing security exposure.
+    * Low /dev/mmcblk1p2 -> Mounted at /tmp (ext4)
+      Description: Writable directory /tmp is missing hardening flags: noexec, nosuid, nodev. An attacker can write and execute files or construct SUID payloads here.
+    * Low /dev/mmcblk1p2 -> Mounted at /tmp (ext4)
+      Description: Writable directory /tmp is missing hardening flags: noexec, nosuid, nodev. An attacker can write and execute files or construct SUID payloads here.
 
 [5] FILE DESCRIPTOR LEAK SCAN (Score: 100/100)
-  - Total File Descriptors Open: 9
+  - Total File Descriptors Open: 3
   - No dangerous host file descriptors or sensitive file access detected.
 
 [6] ENVIRONMENT SECRET SCAN (Score: 70/100)
   Sensitive Keys Exposed:
-    * FTLCONF_webserver_api_password = password
+    * SSH_AUTH_SOCK = /run/user/1000/keyring/ssh
+    * XAUTHORITY = /run/user/1000/.mutter-Xwaylandauth.84S9Q3
 
-[7] INNER-NAMESPACE NETWORK SOCKETS
+[7] HOST PORTS ACCESSIBLE TO CONTAINER
   - Active Listening Ports:
-    * [tcp] 0.0.0.0:27017 (EXPOSED TO NETWORK)
-    * [tcp6] :::27017 (EXPOSED TO NETWORK)
+    * [tcp] 0.0.0.0:56721 (EXPOSED TO NETWORK)
+    * [tcp] 127.0.0.1:631
+    * [tcp] 127.0.0.1:44037
+    * [tcp] 0.0.0.0:22 (EXPOSED TO NETWORK)
+    * [tcp] 0.0.0.0:111 (EXPOSED TO NETWORK)
+    * [tcp] 0.0.0.0:43917 (EXPOSED TO NETWORK)
+    * [tcp] 127.0.0.1:7681
+    * [tcp6] ::1:3350
+    * [tcp6] :::3389 (EXPOSED TO NETWORK)
+    * [tcp6] :::34141 (EXPOSED TO NETWORK)
+    * [tcp6] :::46871 (EXPOSED TO NETWORK)
+    * [tcp6] :::22 (EXPOSED TO NETWORK)
+    * [tcp6] :::111 (EXPOSED TO NETWORK)
+    * [tcp6] ::1:631
   - Established Connections:
-    * [tcp] 192.168.1.19:22 -> 192.168.1.51:35418
+    * [tcp] 192.168.1.80:22 -> 192.168.1.51:42984
 
 RECOMMENDED REMEDIATIONS
   1. Set 'NoNewPrivileges=true' in systemd or '--security-opt=no-new-privileges' in Docker to prevent privilege escalation.
-  2. Apply a confined AppArmor profile (e.g. apparmor:docker-default) or enable SELinux to enforce runtime restrictions.
-  3. Do not expose passwords, API keys, or security tokens in environment variables. Use secret stores (e.g. Docker Secrets, K8s Secrets, HashiCorp Vault) or mount credentials securely as files.
+  2. Do not expose passwords, API keys, or security tokens in environment variables. Use secret stores (e.g. Docker Secrets, K8s Secrets, HashiCorp Vault) or mount credentials securely as files.
 ```
 
 ---

@@ -252,7 +252,21 @@ func (r *AuditReport) RenderCLI() string {
 	sb.WriteString("\n")
 
 	// 7. Sockets & Network Interfaces
-	sb.WriteString(fmt.Sprintf("%s[7] INNER-NAMESPACE NETWORK SOCKETS%s\n", Bold+Underline, Reset))
+	isNetShared := false
+	if r.Namespaces != nil {
+		for _, ns := range r.Namespaces.Namespaces {
+			if ns.Name == "net" && ns.IsSharedWithHost {
+				isNetShared = true
+				break
+			}
+		}
+	}
+
+	headerTitle := "INNER-NAMESPACE NETWORK SOCKETS"
+	if isNetShared {
+		headerTitle = "HOST PORTS ACCESSIBLE TO CONTAINER"
+	}
+	sb.WriteString(fmt.Sprintf("%s[7] %s%s\n", Bold+Underline, headerTitle, Reset))
 	if len(r.Network.ListeningPorts) > 0 {
 		sb.WriteString("  - Active Listening Ports:\n")
 		for _, lp := range r.Network.ListeningPorts {
