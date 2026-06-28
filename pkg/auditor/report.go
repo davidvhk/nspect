@@ -289,6 +289,9 @@ func (r *AuditReport) RenderCLI() string {
 
 	// Summary Recommendation
 	recs := append([]string{}, r.Security.Recommendations...)
+	if r.Mounts != nil {
+		recs = append(recs, r.Mounts.Recommendations...)
+	}
 	if len(r.Env.Secrets) > 0 {
 		recs = append(recs, "Do not expose passwords, API keys, or security tokens in environment variables. Use secret stores (e.g. Docker Secrets, K8s Secrets, HashiCorp Vault) or mount credentials securely as files.")
 	}

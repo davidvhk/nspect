@@ -71,3 +71,83 @@ func TestParseMountInfoLine(t *testing.T) {
 		})
 	}
 }
+
+func TestAuditMountsInternal(t *testing.T) {
+	tests := []struct {
+		name       string
+		mounts     []MountInfo
+		lsmProfile string
+		wantRisks  int
+		wantScore  int
+	}{
+		{
+			name: "Insecure external volume missing all hardening flags",
+			mounts: []MountInfo{
+				{
+					MountPoint:   "/data",
+					MountSource:  "/dev/sdb1",
+					FSType:       "ext4",
+					MountOptions: []string{"rw", "relatime"},
+				},
+			},
+			lsmProfile: "none",
+			wantRisks:  4, // nosuid, nodev, noexec, nosymfollow
+			wantScore:  50, // 100 - (15 + 15 + 10 + 10) = 50
+		},
+		{
+			name: "Fully hardened external volume",
+			mounts: []MountInfo{
+				{
+					MountPoint:   "/data",
+					MountSource:  "/dev/sdb1",
+					FSType:       "ext4",
+					MountOptions: []string{"rw", "nosuid", "nodev", "noexec", "nosymfollow"},
+				},
+			},
+			lsmProfile: "none",
+			wantRisks:  0,
+			wantScore:  100,
+		},
+		{
+			name: "Insecure NFS mount",
+			mounts: []MountInfo{
+				{
+					MountPoint:   "/nfs-share",
+					MountSource:  "192.168.1.50:/share",
+					FSType:       "nfs",
+					MountOptions: []string{"rw", "sec=sys", "proto=udp", "vers=3"},
+				},
+			},
+			lsmProfile: "none",
+			wantRisks:  7, // 4 general flags + 3 nfs flags (sec=sys, proto=udp, NFSv3)
+			wantScore:  34, // 100 - (15+15+10+10+10+3+3) = 34
+		},
+		{
+			name: "Hardened NFS mount",
+			mounts: []MountInfo{
+				{
+					MountPoint:   "/nfs-share",
+					MountSource:  "192.168.1.50:/share",
+					FSType:       "nfs4",
+					MountOptions: []string{"rw", "nosuid", "nodev", "noexec", "nosymfollow", "sec=krb5p", "proto=tcp"},
+				},
+			},
+			lsmProfile: "none",
+			wantRisks:  0,
+			wantScore:  100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := auditMountsInternal(tt.mounts, tt.lsmProfile)
+			if len(res.Risks) != tt.wantRisks {
+				t.Errorf("got %d risks, want %d risks. Risks: %+v", len(res.Risks), tt.wantRisks, res.Risks)
+			}
+			if res.Score != tt.wantScore {
+				t.Errorf("got score %d, want score %d", res.Score, tt.wantScore)
+			}
+		})
+	}
+}
+

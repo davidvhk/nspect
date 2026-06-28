@@ -224,6 +224,17 @@ RECOMMENDED REMEDIATIONS
 
 ---
 
+## Mount Auditing & Host Escape Risks
+
+When auditing filesystem mounts, `nspect` parses `/proc/[pid]/mountinfo` to evaluate mounts **from the perspective of the target process's mount namespace**. While these checks are evaluated inside the container/sandbox context, their security implications directly impact the **host boundary**:
+
+* **`nosuid` missing on writable mounts:** Allows an attacker with root privileges inside the namespace to write an SUID-root binary to a shared volume. If a host user (or script) executes this file, it runs as host root, resulting in host privilege escalation.
+* **`nodev` missing on writable mounts:** Allows a containerized process (with `CAP_MKNOD`) to create character/block device files inside the namespace. If `nodev` is missing, accessing these nodes lets the attacker read or write to raw host disks (e.g., `/dev/sda1`) directly, bypassing directory boundary controls.
+* **`nosymfollow` missing on writable mounts:** Allows an attacker inside the container to create symbolic links pointing to sensitive host directories (e.g., `/etc/shadow`). If a privileged process on the host traverses the mount, it will follow the symlink, potentially leading to unauthorized host file access.
+* **NFS Client Hardening:** Audits client-side NFS parameters to alert on identity spoofing risks (e.g., `sec=sys` without Kerberos), weak transport protocols (UDP), and security gaps from using unprivileged source ports (`noresvport`).
+
+---
+
 ## Building block Architecture
 ```text
 nspect/

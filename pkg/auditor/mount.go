@@ -34,9 +34,10 @@ type MountRisk struct {
 
 // MountAuditResult aggregates all mount assessments.
 type MountAuditResult struct {
-	Mounts []MountInfo `json:"mounts"`
-	Risks  []MountRisk `json:"risks"`
-	Score  int         `json:"score"` // 0 to 100
+	Mounts          []MountInfo `json:"mounts"`
+	Risks           []MountRisk `json:"risks"`
+	Recommendations []string    `json:"recommendations"`
+	Score           int         `json:"score"` // 0 to 100
 }
 
 // ParseMountInfoLine decodes a single line from /proc/[pid]/mountinfo.
@@ -131,6 +132,29 @@ func hasOption(opts []string, opt string) bool {
 	return false
 }
 
+func isKernelPseudoFS(fsType string) bool {
+	pseudoFS := map[string]bool{
+		"proc":        true,
+		"sysfs":       true,
+		"devtmpfs":    true,
+		"devpts":      true,
+		"cgroup":      true,
+		"cgroup2":     true,
+		"pstore":      true,
+		"securityfs":  true,
+		"configfs":    true,
+		"autofs":      true,
+		"debugfs":     true,
+		"tracefs":     true,
+		"hugetlbfs":   true,
+		"mqueue":      true,
+		"selinuxfs":   true,
+		"binfmt_misc": true,
+		"nsfs":        true,
+	}
+	return pseudoFS[fsType]
+}
+
 // AuditMounts audits the mount configuration of a given process.
 func AuditMounts(pid int) (*MountAuditResult, error) {
 	mounts, err := ReadMountInfo(pid)
@@ -149,6 +173,10 @@ func AuditMounts(pid int) (*MountAuditResult, error) {
 		}
 	}
 
+	return auditMountsInternal(mounts, lsmProfile), nil
+}
+
+func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResult {
 	lsmRestrictsWrites := false
 	if lsmProfile != "none" && lsmProfile != "unconfined" && !strings.Contains(lsmProfile, "unconfined") && !strings.Contains(lsmProfile, "(complain)") {
 		// AppArmor / SELinux active and enforcing
@@ -274,6 +302,9 @@ func AuditMounts(pid int) (*MountAuditResult, error) {
 			if !hasOption(m.MountOptions, "nodev") {
 				missingFlags = append(missingFlags, "nodev")
 			}
+			if !hasOption(m.MountOptions, "nosymfollow") {
+				missingFlags = append(missingFlags, "nosymfollow")
+			}
 
 			if len(missingFlags) > 0 {
 				risks = append(risks, MountRisk{
@@ -281,7 +312,7 @@ func AuditMounts(pid int) (*MountAuditResult, error) {
 					MountSource: m.MountSource,
 					FSType:      m.FSType,
 					RiskLevel:   "Low",
-					Description: fmt.Sprintf("Writable directory %s is missing hardening flags: %s. An attacker can write and execute files or construct SUID payloads here.", m.MountPoint, strings.Join(missingFlags, ", ")),
+					Description: fmt.Sprintf("Writable directory %s is missing hardening flags: %s. An attacker can write and execute files, construct SUID payloads, create device nodes, or exploit symlinks here.", m.MountPoint, strings.Join(missingFlags, ", ")),
 				})
 				scoreReduction += 3 * len(missingFlags)
 			}
@@ -300,6 +331,129 @@ func AuditMounts(pid int) (*MountAuditResult, error) {
 				Description: "Exposed writeable host root directory. Gives direct access to the host's filesystem, bypassing all file isolation.",
 			})
 			scoreReduction += 30
+		}
+
+		// 5. General Mount Hardening Flags on external/bind/network/tmpfs mounts
+		if isRW && m.MountPoint != "/" && !isKernelPseudoFS(m.FSType) &&
+			m.MountPoint != "/tmp" && m.MountPoint != "/dev/shm" && m.MountPoint != "/run/lock" {
+			
+			if !hasOption(m.MountOptions, "nosuid") && !hasOption(m.SuperOptions, "nosuid") {
+				risks = append(risks, MountRisk{
+					MountPoint:  m.MountPoint,
+					MountSource: m.MountSource,
+					FSType:      m.FSType,
+					RiskLevel:   "High",
+					Description: fmt.Sprintf("Writable volume/bind mount %s is missing the 'nosuid' flag. An attacker can write SUID binaries to this volume, which can be executed (e.g., on the host or other namespaces) to escalate privileges.", m.MountPoint),
+				})
+				scoreReduction += 15
+			}
+			if !hasOption(m.MountOptions, "nodev") && !hasOption(m.SuperOptions, "nodev") {
+				risks = append(risks, MountRisk{
+					MountPoint:  m.MountPoint,
+					MountSource: m.MountSource,
+					FSType:      m.FSType,
+					RiskLevel:   "High",
+					Description: fmt.Sprintf("Writable volume/bind mount %s is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.", m.MountPoint),
+				})
+				scoreReduction += 15
+			}
+			if !hasOption(m.MountOptions, "noexec") && !hasOption(m.SuperOptions, "noexec") {
+				risks = append(risks, MountRisk{
+					MountPoint:  m.MountPoint,
+					MountSource: m.MountSource,
+					FSType:      m.FSType,
+					RiskLevel:   "Medium",
+					Description: fmt.Sprintf("Writable volume/bind mount %s is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.", m.MountPoint),
+				})
+				scoreReduction += 10
+			}
+			if !hasOption(m.MountOptions, "nosymfollow") && !hasOption(m.SuperOptions, "nosymfollow") {
+				risks = append(risks, MountRisk{
+					MountPoint:  m.MountPoint,
+					MountSource: m.MountSource,
+					FSType:      m.FSType,
+					RiskLevel:   "Medium",
+					Description: fmt.Sprintf("Writable volume/bind mount %s is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.", m.MountPoint),
+				})
+				scoreReduction += 10
+			}
+		}
+
+		// 6. NFS Mount Security Audits
+		isNFS := strings.HasPrefix(m.FSType, "nfs")
+		if isNFS {
+			// Check for sec=sys or lack of sec=krb5/krb5i/krb5p
+			hasKrb := false
+			hasSecSys := false
+			for _, opt := range m.MountOptions {
+				if strings.HasPrefix(opt, "sec=krb5") {
+					hasKrb = true
+				}
+				if opt == "sec=sys" {
+					hasSecSys = true
+				}
+			}
+			for _, opt := range m.SuperOptions {
+				if strings.HasPrefix(opt, "sec=krb5") {
+					hasKrb = true
+				}
+				if opt == "sec=sys" {
+					hasSecSys = true
+				}
+			}
+
+			if !hasKrb || hasSecSys {
+				risks = append(risks, MountRisk{
+					MountPoint:  m.MountPoint,
+					MountSource: m.MountSource,
+					FSType:      m.FSType,
+					RiskLevel:   "Medium",
+					Description: fmt.Sprintf("NFS mount %s uses weak 'sec=sys' authentication (or defaults to it). It relies on the client system to assert UIDs/GIDs over the network without cryptographic verification, allowing identity spoofing.", m.MountPoint),
+				})
+				scoreReduction += 10
+			}
+
+			// Check for noresvport
+			if hasOption(m.MountOptions, "noresvport") || hasOption(m.SuperOptions, "noresvport") {
+				risks = append(risks, MountRisk{
+					MountPoint:  m.MountPoint,
+					MountSource: m.MountSource,
+					FSType:      m.FSType,
+					RiskLevel:   "Medium",
+					Description: fmt.Sprintf("NFS mount %s is configured with 'noresvport'. This allows the NFS client to use unprivileged source ports (>1024), bypassing source port security checks on the NFS server.", m.MountPoint),
+				})
+				scoreReduction += 5
+			}
+
+			// Check for UDP protocol
+			hasUDP := hasOption(m.MountOptions, "proto=udp") || hasOption(m.SuperOptions, "proto=udp") ||
+				hasOption(m.MountOptions, "udp") || hasOption(m.SuperOptions, "udp")
+			if hasUDP {
+				risks = append(risks, MountRisk{
+					MountPoint:  m.MountPoint,
+					MountSource: m.MountSource,
+					FSType:      m.FSType,
+					RiskLevel:   "Low",
+					Description: fmt.Sprintf("NFS mount %s uses UDP transport protocol. UDP is stateless and susceptible to source IP spoofing and session hijacking compared to TCP.", m.MountPoint),
+				})
+				scoreReduction += 3
+			}
+
+			// Check for NFSv3 or earlier
+			isNFSv3OrEarlier := m.FSType == "nfs" || hasOption(m.MountOptions, "vers=3") || hasOption(m.SuperOptions, "vers=3") ||
+				hasOption(m.MountOptions, "vers=2") || hasOption(m.SuperOptions, "vers=2") ||
+				hasOption(m.MountOptions, "v3") || hasOption(m.SuperOptions, "v3") ||
+				hasOption(m.MountOptions, "v2") || hasOption(m.SuperOptions, "v2")
+			if isNFSv3OrEarlier {
+				risks = append(risks, MountRisk{
+					MountPoint:  m.MountPoint,
+					MountSource: m.MountSource,
+					FSType:      m.FSType,
+					RiskLevel:   "Low",
+					Description: fmt.Sprintf("NFS mount %s uses NFSv3 (or earlier). NFSv3 lacks modern security features of NFSv4, such as strong state tracking, integrated ACLs, and single-port operation.", m.MountPoint),
+				})
+				scoreReduction += 3
+			}
 		}
 	}
 
@@ -321,9 +475,73 @@ func AuditMounts(pid int) (*MountAuditResult, error) {
 		finalScore = 100 // Read-only root and no issues is a perfect score
 	}
 
+	// Collect recommendations
+	var recs []string
+	hasMissingNosuid := false
+	hasMissingNodev := false
+	hasMissingNoexec := false
+	hasMissingNosymfollow := false
+	hasNfsWeakSec := false
+	hasNfsNoResvPort := false
+	hasNfsUdp := false
+	hasNfsV3 := false
+
+	for _, r := range risks {
+		if strings.Contains(r.Description, "nosuid") {
+			hasMissingNosuid = true
+		}
+		if strings.Contains(r.Description, "nodev") {
+			hasMissingNodev = true
+		}
+		if strings.Contains(r.Description, "noexec") {
+			hasMissingNoexec = true
+		}
+		if strings.Contains(r.Description, "nosymfollow") {
+			hasMissingNosymfollow = true
+		}
+		if strings.Contains(r.Description, "sec=sys") {
+			hasNfsWeakSec = true
+		}
+		if strings.Contains(r.Description, "noresvport") {
+			hasNfsNoResvPort = true
+		}
+		if strings.Contains(r.Description, "UDP transport") {
+			hasNfsUdp = true
+		}
+		if strings.Contains(r.Description, "NFSv3") {
+			hasNfsV3 = true
+		}
+	}
+
+	if hasMissingNosuid {
+		recs = append(recs, "Mount critical volumes (especially host-bind mounts or shared directories) with the 'nosuid' option to prevent privilege escalation via SUID binaries.")
+	}
+	if hasMissingNodev {
+		recs = append(recs, "Mount external/shared directories with the 'nodev' option to prevent container processes from creating or accessing raw block/character devices.")
+	}
+	if hasMissingNoexec {
+		recs = append(recs, "Ensure writable filesystems not hosting executable programs are mounted with the 'noexec' option to block execution of dropped binaries/payloads.")
+	}
+	if hasMissingNosymfollow {
+		recs = append(recs, "Mount user-writable directories or shared host paths with the 'nosymfollow' option to prevent symlink-following host escape vulnerabilities.")
+	}
+	if hasNfsWeakSec {
+		recs = append(recs, "Configure NFS mounts to use Kerberos authentication (e.g., 'sec=krb5', 'sec=krb5i', or 'sec=krb5p') instead of UNIX UID/GID mapping ('sec=sys') to prevent identity spoofing.")
+	}
+	if hasNfsNoResvPort {
+		recs = append(recs, "Avoid using 'noresvport' on NFS client mounts unless required, as it permits connections from unprivileged client source ports, bypassing standard export restrictions.")
+	}
+	if hasNfsUdp {
+		recs = append(recs, "Use TCP transport ('proto=tcp') instead of UDP ('proto=udp') for NFS mounts to ensure packet delivery reliability and resist spoofing/hijacking.")
+	}
+	if hasNfsV3 {
+		recs = append(recs, "Upgrade NFS client mounts to use NFSv4 (e.g., 'vers=4') to benefit from modern security features like strong state tracking and integrated ACLs.")
+	}
+
 	return &MountAuditResult{
-		Mounts: mounts,
-		Risks:  risks,
-		Score:  finalScore,
-	}, nil
+		Mounts:          mounts,
+		Risks:           risks,
+		Recommendations: recs,
+		Score:           finalScore,
+	}
 }
