@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-VERSION="0.0.1"
+VERSION="0.0.2"
 ARCH="amd64"
 RPM_ARCH="x86_64"
 
@@ -95,6 +95,8 @@ cp nspect \$RPM_BUILD_ROOT/usr/local/bin/nspect
 %changelog
 * Sat Jun 27 2026 David Vanhoucke <vanhouckedavid@gmail.com> - 0.0.1-1
 - Initial beta release
+* Sun Jun 28 2026 David Vanhoucke <vanhouckedavid@gmail.com> - 0.0.2-1
+- add mounting audit
 EOF
 
 rpmbuild --define "_topdir $RPM_DIR" -bb "$RPM_DIR/SPECS/nspect.spec"
