@@ -12,15 +12,16 @@ import (
 
 // MountInfo represents a parsed mount entry from /proc/[pid]/mountinfo.
 type MountInfo struct {
-	MountID      int      `json:"mount_id"`
-	ParentID     int      `json:"parent_id"`
-	MajorMinor   string   `json:"major_minor"`
-	Root         string   `json:"root"`
-	MountPoint   string   `json:"mount_point"`
-	MountOptions []string `json:"mount_options"`
-	FSType       string   `json:"fs_type"`
-	MountSource  string   `json:"mount_source"`
-	SuperOptions []string `json:"super_options"`
+	MountID        int      `json:"mount_id"`
+	ParentID       int      `json:"parent_id"`
+	MajorMinor     string   `json:"major_minor"`
+	Root           string   `json:"root"`
+	MountPoint     string   `json:"mount_point"`
+	MountOptions   []string `json:"mount_options"`
+	OptionalFields []string `json:"optional_fields"`
+	FSType         string   `json:"fs_type"`
+	MountSource    string   `json:"mount_source"`
+	SuperOptions   []string `json:"super_options"`
 }
 
 // MountRisk details a discovered mount security exposure.
@@ -83,16 +84,22 @@ func ParseMountInfoLine(line string) (*MountInfo, error) {
 		superOptions = strings.Split(fields[sepIndex+3], ",")
 	}
 
+	var optionalFields []string
+	if sepIndex > 6 {
+		optionalFields = fields[6:sepIndex]
+	}
+
 	return &MountInfo{
-		MountID:      mountID,
-		ParentID:     parentID,
-		MajorMinor:   majorMinor,
-		Root:         root,
-		MountPoint:   mountPoint,
-		MountOptions: mountOptions,
-		FSType:       fsType,
-		MountSource:  mountSource,
-		SuperOptions: superOptions,
+		MountID:        mountID,
+		ParentID:       parentID,
+		MajorMinor:     majorMinor,
+		Root:           root,
+		MountPoint:     mountPoint,
+		MountOptions:   mountOptions,
+		OptionalFields: optionalFields,
+		FSType:         fsType,
+		MountSource:    mountSource,
+		SuperOptions:   superOptions,
 	}, nil
 }
 
@@ -455,6 +462,25 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 				scoreReduction += 3
 			}
 		}
+
+		// Check for Shared Mount Propagation
+		hasSharedPropagation := false
+		for _, opt := range m.OptionalFields {
+			if strings.HasPrefix(opt, "shared:") {
+				hasSharedPropagation = true
+				break
+			}
+		}
+		if hasSharedPropagation && isRW {
+			risks = append(risks, MountRisk{
+				MountPoint:  m.MountPoint,
+				MountSource: m.MountSource,
+				FSType:      m.FSType,
+				RiskLevel:   "High",
+				Description: fmt.Sprintf("Mount %s is configured with shared propagation ('shared:'). Any mount or unmount event inside the namespace will propagate back to the host, posing a container escape or denial-of-service vector.", m.MountPoint),
+			})
+			scoreReduction += 20
+		}
 	}
 
 	// Calculate score
@@ -513,6 +539,22 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 		}
 	}
 
+	hasSharedPropagation := false
+	for _, r := range risks {
+		if strings.Contains(r.Description, "shared propagation") {
+			hasSharedPropagation = true
+		}
+	}
+
+	hasNestedContainers := false
+	for _, m := range mounts {
+		ptL := strings.ToLower(m.MountPoint)
+		if strings.Contains(ptL, "docker") || strings.Contains(ptL, "containerd") || m.FSType == "overlay" {
+			hasNestedContainers = true
+			break
+		}
+	}
+
 	if hasMissingNosuid {
 		recs = append(recs, "Mount critical volumes (especially host-bind mounts or shared directories) with the 'nosuid' option to prevent privilege escalation via SUID binaries.")
 	}
@@ -524,6 +566,13 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 	}
 	if hasMissingNosymfollow {
 		recs = append(recs, "Mount user-writable directories or shared host paths with the 'nosymfollow' option to prevent symlink-following host escape vulnerabilities.")
+	}
+	if hasSharedPropagation {
+		recs = append(recs, "Configure mount propagation to 'slave' or 'private' (e.g. using '--mount type=bind,src=...,dst=...,bind-propagation=slave' in Docker) to prevent container filesystem operations from propagating to the host.")
+	}
+	if hasNestedContainers {
+		recs = append(recs, "Nested container workloads detected (Docker/OverlayFS). Ensure nested containers drop CAP_MKNOD and CAP_NET_RAW, and run with '--security-opt=no-new-privileges' to block nested breakouts.")
+		recs = append(recs, "For nested Docker/LXC mount paths, configure mount options with 'nodev,nosuid,noexec' to prevent container filesystem breakouts.")
 	}
 	if hasNfsWeakSec {
 		recs = append(recs, "Configure NFS mounts to use Kerberos authentication (e.g., 'sec=krb5', 'sec=krb5i', or 'sec=krb5p') instead of UNIX UID/GID mapping ('sec=sys') to prevent identity spoofing.")

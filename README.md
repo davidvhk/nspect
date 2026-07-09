@@ -32,10 +32,10 @@ Unlike static config parsers or traditional local privilege escalation scripts (
 
 ## Features
 
-- **Namespace Auditing:** Compares process namespaces (`ipc`, `uts`, `mnt`, `net`, `pid`, `user`, `cgroup`, `time`) with baseline contexts to identify boundary leaks.
+- **Namespace Auditing:** Compares process namespaces (`ipc`, `uts`, `mnt`, `net`, `pid`, `user`, `cgroup`, `time`) with baseline contexts to identify boundary leaks and shared mount propagation paths.
 - **Capability Analysis:** Decodes hex capability bitmasks (`CapEff`, `CapPrm`, `CapBnd`) against a security risk matrix. Automatically adjusts risk weightings for rootless/non-root environments.
-- **Mount Exposure Scan:** Parses mount points to detect writable kernel interfaces (`/sys`, `/proc`), runtime control sockets (Docker, containerd, podman), and missing filesystem hardening flags (`nosuid`, `nodev`, `noexec`).
-- **Security Context Audit:** Audits user namespace mapping (rootless vs. root), Seccomp status, LSM profile states (AppArmor/SELinux), and the `NoNewPrivileges` configuration.
+- **Mount Exposure Scan:** Parses mount points to detect writable kernel interfaces (`/sys`, `/proc`), runtime control sockets (Docker, containerd, podman), mount propagation states (`shared`), and missing filesystem hardening flags (`nosuid`, `nodev`, `noexec`).
+- **Security Context Audit:** Audits user namespace mapping ranges (single-user vs wide translate boundaries), group ID setting policies (`setgroups`), Seccomp status, LSM profile states (AppArmor/SELinux), PID 1 init process safety (mitigating zombie leakage), cgroup resource limit enforcement (memory/PIDs constraints), and the `NoNewPrivileges` configuration.
 - **Environment Secret Scanner:** Decodes `/proc/[pid]/environ` to scan for key patterns pointing to credentials, tokens, or passwords (`*PASS*`, `*SECRET*`, `*KEY*`, `*TOKEN*`), displaying them masked to avoid output leakage.
 - **Inner-Namespace Socket Analyzer:** Directly parses `/proc/[pid]/net/tcp` and `/proc/[pid]/net/tcp6` inside target network namespaces, exposing active listening ports and connections without needing namespace-entering tools.
 - **FD Leak Detector:** Catalogue `/proc/[pid]/fd/` descriptors and alerts on inherited host directories (abuseable via `openat`), raw storage blocks, or critical configuration files.
@@ -231,6 +231,7 @@ When auditing filesystem mounts, `nspect` parses `/proc/[pid]/mountinfo` to eval
 * **`nosuid` missing on writable mounts:** Allows an attacker with root privileges inside the namespace to write an SUID-root binary to a shared volume. If a host user (or script) executes this file, it runs as host root, resulting in host privilege escalation.
 * **`nodev` missing on writable mounts:** Allows a containerized process (with `CAP_MKNOD`) to create character/block device files inside the namespace. If `nodev` is missing, accessing these nodes lets the attacker read or write to raw host disks (e.g., `/dev/sda1`) directly, bypassing directory boundary controls.
 * **`nosymfollow` missing on writable mounts:** Allows an attacker inside the container to create symbolic links pointing to sensitive host directories (e.g., `/etc/shadow`). If a privileged process on the host traverses the mount, it will follow the symlink, potentially leading to unauthorized host file access.
+* **Shared Mount Propagation:** Flags mounts configured with shared propagation (`shared:`). If a writable mount is shared, any mounting or unmounting events inside the namespace propagate back to the host, offering denial-of-service or host escape paths.
 * **NFS Client Hardening:** Audits client-side NFS parameters to alert on identity spoofing risks (e.g., `sec=sys` without Kerberos), weak transport protocols (UDP), and security gaps from using unprivileged source ports (`noresvport`).
 
 ---

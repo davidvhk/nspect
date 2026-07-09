@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"nspect/pkg/util"
 )
@@ -49,6 +50,31 @@ func GetNamespaceInode(pid int, nsName string) (uint64, error) {
 	return inode, nil
 }
 
+// CheckUnprivilegedUserNS parses the UID map of a process to see if it is mapped to a non-root host user.
+func CheckUnprivilegedUserNS(pid int) bool {
+	uidMapPath := util.ProcPath(pid, "uid_map")
+	uidMapData, err := os.ReadFile(uidMapPath)
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(string(uidMapData), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 3 {
+			containerUID := fields[0]
+			hostUID := fields[1]
+			if containerUID == "0" && hostUID != "0" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // AuditNamespaces compares namespaces of the target PID against host PID 1.
 func AuditNamespaces(targetPID int) (*NamespaceAuditResult, error) {
 	nsTypes := []string{"cgroup", "ipc", "mnt", "net", "pid", "user", "uts"}
@@ -61,6 +87,8 @@ func AuditNamespaces(targetPID int) (*NamespaceAuditResult, error) {
 	var infos []NamespaceInfo
 	scoreReduction := 0
 	maxReduction := 100
+
+	isUnprivileged := CheckUnprivilegedUserNS(targetPID) || CheckUnprivilegedUserNS(os.Getpid())
 
 	for _, ns := range nsTypes {
 		targetInode, err := GetNamespaceInode(targetPID, ns)
@@ -89,60 +117,99 @@ func AuditNamespaces(targetPID int) (*NamespaceAuditResult, error) {
 		switch ns {
 		case "mnt":
 			if isShared {
-				risk = "Critical"
-				desc = "Shares mount namespace with host. The container can see and potentially manipulate all host mounts."
-				scoreReduction += 30
+				if isUnprivileged {
+					risk = "Medium"
+					desc = "Shares mount namespace with container root. Protected by unprivileged user namespace boundary."
+					scoreReduction += 5
+				} else {
+					risk = "Critical"
+					desc = "Shares mount namespace with host. The container can see and potentially manipulate all host mounts."
+					scoreReduction += 30
+				}
 			} else {
 				desc = "Mount namespace is isolated."
 			}
 		case "pid":
 			if isShared {
-				risk = "High"
-				desc = "Shares PID namespace with host. The container can view, trace, and terminate host processes."
-				scoreReduction += 25
+				if isUnprivileged {
+					risk = "Medium"
+					desc = "Shares PID namespace with container root. Protected by unprivileged user namespace boundary."
+					scoreReduction += 5
+				} else {
+					risk = "High"
+					desc = "Shares PID namespace with host. The container can view, trace, and terminate host processes."
+					scoreReduction += 25
+				}
 			} else {
 				desc = "Process namespace is isolated."
 			}
 		case "net":
 			if isShared {
-				risk = "High"
-				desc = "Shares Network namespace with host. The container shares host interfaces, socket tables, and can sniff network traffic."
-				scoreReduction += 25
+				if isUnprivileged {
+					risk = "Medium"
+					desc = "Shares Network namespace with container root. Protected by unprivileged user namespace boundary."
+					scoreReduction += 5
+				} else {
+					risk = "High"
+					desc = "Shares Network namespace with host. The container shares host interfaces, socket tables, and can sniff network traffic."
+					scoreReduction += 25
+				}
 			} else {
 				desc = "Network namespace is isolated."
 			}
 		case "ipc":
 			if isShared {
-				risk = "Medium"
-				desc = "Shares IPC namespace with host. The container can access host shared memory, semaphores, and message queues."
-				scoreReduction += 15
+				if isUnprivileged {
+					risk = "Low"
+					desc = "Shares IPC namespace with container root. Protected by unprivileged user namespace boundary."
+					scoreReduction += 2
+				} else {
+					risk = "Medium"
+					desc = "Shares IPC namespace with host. The container can access host shared memory, semaphores, and message queues."
+					scoreReduction += 15
+				}
 			} else {
 				desc = "IPC namespace is isolated."
 			}
 		case "uts":
 			if isShared {
-				risk = "Low"
-				desc = "Shares UTS namespace with host. The container shares the host hostname, allowing modification."
-				scoreReduction += 5
+				if isUnprivileged {
+					risk = "Low"
+					desc = "Shares UTS namespace with container root. Protected by unprivileged user namespace boundary."
+					scoreReduction += 1
+				} else {
+					risk = "Low"
+					desc = "Shares UTS namespace with host. The container shares the host hostname, allowing modification."
+					scoreReduction += 5
+				}
 			} else {
 				desc = "UTS (hostname) namespace is isolated."
 			}
 		case "user":
 			if isShared {
-				// Running in host user namespace. 
-				// This is only Critical/High if running as UID 0. We will combine this with UID check in security auditor,
-				// but namespace sharing itself indicates lack of user namespace isolation.
-				risk = "Medium"
-				desc = "Shares User namespace with host. No UID/GID virtualization is active."
-				scoreReduction += 10
+				if isUnprivileged {
+					risk = "Info"
+					desc = "Shares User namespace with container root."
+					scoreReduction += 0
+				} else {
+					risk = "Medium"
+					desc = "Shares User namespace with host. No UID/GID virtualization is active."
+					scoreReduction += 10
+				}
 			} else {
 				desc = "User namespace is isolated (rootless/virtualized UID space)."
 			}
 		case "cgroup":
 			if isShared {
-				risk = "Low"
-				desc = "Shares cgroup namespace with host. May leak host cgroup layout information."
-				scoreReduction += 5
+				if isUnprivileged {
+					risk = "Info"
+					desc = "Shares cgroup namespace with container root."
+					scoreReduction += 0
+				} else {
+					risk = "Low"
+					desc = "Shares cgroup namespace with host. May leak host cgroup layout information."
+					scoreReduction += 5
+				}
 			} else {
 				desc = "Cgroup namespace is isolated."
 			}

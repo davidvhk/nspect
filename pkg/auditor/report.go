@@ -165,6 +165,48 @@ func (r *AuditReport) RenderCLI() string {
 	}
 	sb.WriteString(fmt.Sprintf("  - NoNewPrivs   : %s\n", nnpStatus))
 	sb.WriteString(fmt.Sprintf("  - LSM Status   : %s\n", r.Security.LSMProfile))
+	if r.Security.SetgroupsStatus != "" {
+		sgColor := Green
+		if r.Security.SetgroupsStatus == "allow" && r.Security.UserNSMapped {
+			sgColor = Yellow
+		}
+		sb.WriteString(fmt.Sprintf("  - Setgroups    : %s%s%s\n", sgColor, r.Security.SetgroupsStatus, Reset))
+	}
+	if r.Security.InitProcessName != "" {
+		initColor := Green
+		isPidIsolated := false
+		if r.Namespaces != nil {
+			for _, ns := range r.Namespaces.Namespaces {
+				if ns.Name == "pid" && !ns.IsSharedWithHost {
+					isPidIsolated = true
+					break
+				}
+			}
+		}
+		if isPidIsolated {
+			standardInits := map[string]bool{
+				"systemd": true, "init": true, "tini": true, "dumb-init": true, "s6-svscan": true, "runit": true, "pause": true,
+			}
+			if !standardInits[r.Security.InitProcessName] {
+				initColor = Yellow
+			}
+		}
+		sb.WriteString(fmt.Sprintf("  - PID 1 Name   : %s%s%s\n", initColor, r.Security.InitProcessName, Reset))
+	}
+	if r.Security.CgroupMemoryLimit != "" && r.Security.CgroupMemoryLimit != "none" {
+		memColor := Green
+		if r.Security.CgroupMemoryLimit == "unlimited" || r.Security.CgroupMemoryLimit == "unknown" {
+			memColor = Yellow
+		}
+		sb.WriteString(fmt.Sprintf("  - Cgroup Memory: %s%s%s\n", memColor, r.Security.CgroupMemoryLimit, Reset))
+	}
+	if r.Security.CgroupPidsLimit != "" && r.Security.CgroupPidsLimit != "none" {
+		pidsColor := Green
+		if r.Security.CgroupPidsLimit == "unlimited" || r.Security.CgroupPidsLimit == "unknown" {
+			pidsColor = Yellow
+		}
+		sb.WriteString(fmt.Sprintf("  - Cgroup PIDs  : %s%s%s\n", pidsColor, r.Security.CgroupPidsLimit, Reset))
+	}
 
 	if len(r.Security.Risks) > 0 {
 		sb.WriteString(fmt.Sprintf("  %s%sHardening Issues Identified:%s\n", Bold, Yellow, Reset))
