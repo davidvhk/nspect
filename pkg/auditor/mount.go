@@ -546,6 +546,15 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 		}
 	}
 
+	hasNestedContainers := false
+	for _, m := range mounts {
+		ptL := strings.ToLower(m.MountPoint)
+		if strings.Contains(ptL, "docker") || strings.Contains(ptL, "containerd") || m.FSType == "overlay" {
+			hasNestedContainers = true
+			break
+		}
+	}
+
 	if hasMissingNosuid {
 		recs = append(recs, "Mount critical volumes (especially host-bind mounts or shared directories) with the 'nosuid' option to prevent privilege escalation via SUID binaries.")
 	}
@@ -560,6 +569,10 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 	}
 	if hasSharedPropagation {
 		recs = append(recs, "Configure mount propagation to 'slave' or 'private' (e.g. using '--mount type=bind,src=...,dst=...,bind-propagation=slave' in Docker) to prevent container filesystem operations from propagating to the host.")
+	}
+	if hasNestedContainers {
+		recs = append(recs, "Nested container workloads detected (Docker/OverlayFS). Ensure nested containers drop CAP_MKNOD and CAP_NET_RAW, and run with '--security-opt=no-new-privileges' to block nested breakouts.")
+		recs = append(recs, "For nested Docker/LXC mount paths, configure mount options with 'nodev,nosuid,noexec' to prevent container filesystem breakouts.")
 	}
 	if hasNfsWeakSec {
 		recs = append(recs, "Configure NFS mounts to use Kerberos authentication (e.g., 'sec=krb5', 'sec=krb5i', or 'sec=krb5p') instead of UNIX UID/GID mapping ('sec=sys') to prevent identity spoofing.")

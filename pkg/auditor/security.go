@@ -108,6 +108,7 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 		} else {
 			// EUID 0 but mapped (rootless)
 			recs = append(recs, "Although process runs as root internally, it is mapped to a non-privileged user on the host. Maintain this user namespace isolation.")
+			recs = append(recs, "Unprivileged container boundary detected. Ensure host-level LXC/container configuration enforces 'nodev=1,nosuid=1,noexec=1' on all host mount points to restrict raw device node creation.")
 		}
 	}
 
