@@ -244,6 +244,8 @@ func AuditCapabilities(pid int) (*CapabilityAuditResult, error) {
 	scoreReduction := 0
 	seen := make(map[string]bool)
 
+	isUnprivileged := CheckUnprivilegedUserNS(pid) || CheckUnprivilegedUserNS(1)
+
 	// If the process is running as root, we audit both Effective and Bounding capabilities,
 	// since root processes can easily activate capabilities in their bounding set.
 	// If the process is non-root, we only audit active (Effective/Permitted) capabilities.
@@ -261,6 +263,21 @@ func AuditCapabilities(pid int) (*CapabilityAuditResult, error) {
 		seen[capName] = true
 
 		if risk, exists := CapabilityRiskDatabase[capName]; exists {
+			if isUnprivileged {
+				// Downgrade capability risks if sandboxed by user namespace
+				switch risk.RiskLevel {
+				case "Critical":
+					risk.RiskLevel = "Medium"
+					risk.Description = "[Sandboxed by User Namespace] " + risk.Description
+				case "High":
+					risk.RiskLevel = "Low"
+					risk.Description = "[Sandboxed by User Namespace] " + risk.Description
+				case "Medium":
+					risk.RiskLevel = "Low"
+					risk.Description = "[Sandboxed by User Namespace] " + risk.Description
+				}
+			}
+
 			highRiskCaps = append(highRiskCaps, risk)
 			switch risk.RiskLevel {
 			case "Critical":

@@ -11,17 +11,21 @@ import (
 
 // SecurityAuditResult holds the process credentials and hardening details.
 type SecurityAuditResult struct {
-	UID              int      `json:"uid"`
-	EUID             int      `json:"euid"`
-	GID              int      `json:"gid"`
-	EGID             int      `json:"egid"`
-	SeccompMode      int      `json:"seccomp_mode"`       // 0=disabled, 1=strict, 2=filter
-	NoNewPrivs       bool     `json:"no_new_privs"`       // true/false
-	LSMProfile       string   `json:"lsm_profile"`        // apparmor, selinux, or unconfined
-	UserNSMapped     bool     `json:"usern_ns_mapped"`    // true if user namespace is virtualized (rootless)
-	Risks            []string `json:"risks"`
-	Recommendations  []string `json:"recommendations"`
-	Score            int      `json:"score"` // 0 to 100
+	UID               int      `json:"uid"`
+	EUID              int      `json:"euid"`
+	GID               int      `json:"gid"`
+	EGID              int      `json:"egid"`
+	SeccompMode       int      `json:"seccomp_mode"`       // 0=disabled, 1=strict, 2=filter
+	NoNewPrivs        bool     `json:"no_new_privs"`       // true/false
+	LSMProfile        string   `json:"lsm_profile"`        // apparmor, selinux, or unconfined
+	UserNSMapped      bool     `json:"usern_ns_mapped"`    // true if user namespace is virtualized (rootless)
+	SetgroupsStatus   string   `json:"setgroups_status"`   // allow or deny
+	InitProcessName   string   `json:"init_process_name"`  // PID 1 name
+	CgroupMemoryLimit string   `json:"cgroup_memory_limit"` // memory max or unlimited
+	CgroupPidsLimit   string   `json:"cgroup_pids_limit"`   // pids max or unlimited
+	Risks             []string `json:"risks"`
+	Recommendations   []string `json:"recommendations"`
+	Score             int      `json:"score"` // 0 to 100
 }
 
 // AuditSecurity checks process level sandboxing and credential settings.
@@ -60,6 +64,7 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 
 	// 2. User Namespace mapping check (rootless status)
 	isRootless := false
+	maxMapRange := 0
 	uidMapPath := util.ProcPath(pid, "uid_map")
 	uidMapData, err := os.ReadFile(uidMapPath)
 	if err == nil {
@@ -73,6 +78,11 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 			if len(fields) == 3 {
 				containerUID := fields[0]
 				hostUID := fields[1]
+				lengthStr := fields[2]
+				length, _ := strconv.Atoi(lengthStr)
+				if length > maxMapRange {
+					maxMapRange = length
+				}
 
 				// If UID 0 in container maps to host UID 0 (usually indicated by hostUID "0" and length "4294967295" or similar)
 				if containerUID == "0" && hostUID != "0" {
@@ -83,6 +93,11 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 				// e.g. 0 100000 65536
 			}
 		}
+	}
+
+	if isRootless && maxMapRange > 1 {
+		risks = append(risks, fmt.Sprintf("User namespace maps a large range of UIDs (%d). This exposes a larger identity translation surface.", maxMapRange))
+		recs = append(recs, "For single-process sandboxes, restrict the user namespace mapping range to exactly 1 UID (e.g. '0 1000 1').")
 	}
 
 	if euid == 0 {
@@ -146,22 +161,247 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 		scoreReduction += 20
 	}
 
+	// 6. Setgroups check
+	setgroupsStatus := GetSetgroupsStatus(pid)
+	if setgroupsStatus == "allow" && isRootless {
+		risks = append(risks, "The user namespace allows calling setgroups(2). This can allow dropping group memberships to bypass negative permissions.")
+		recs = append(recs, "Disable group capability changes by setting '/proc/[pid]/setgroups' to 'deny' inside the user namespace configuration.")
+		scoreReduction += 10
+	}
+
+	// 7. PID 1 Check
+	initProcName, _ := FindPID1Name(pid)
+	isPidIsolated := false
+	targetPidNS, err := GetNamespaceInode(pid, "pid")
+	if err == nil {
+		hostPidNS, err := GetNamespaceInode(1, "pid")
+		if err != nil {
+			hostPidNS, _ = GetNamespaceInode(os.Getpid(), "pid")
+		}
+		if hostPidNS != 0 && targetPidNS != hostPidNS {
+			isPidIsolated = true
+		}
+	}
+	if isPidIsolated && initProcName != "" && initProcName != "unknown" {
+		standardInits := map[string]bool{
+			"systemd": true, "init": true, "tini": true, "dumb-init": true, "s6-svscan": true, "runit": true, "pause": true,
+		}
+		if !standardInits[initProcName] {
+			risks = append(risks, fmt.Sprintf("PID 1 in isolated process namespace is a non-standard init process (%s). This might lead to zombie process accumulation.", initProcName))
+			recs = append(recs, "Use a lightweight init system like tini or dumb-init as the container/sandbox entrypoint to reap zombie processes.")
+			scoreReduction += 10
+		}
+	}
+
+	// 8. Cgroup Limits check
+	memLimit, pidsLimit := GetCgroupLimits(pid)
+	isIsolated := false
+	targetMntNS, err := GetNamespaceInode(pid, "mnt")
+	if err == nil {
+		hostMntNS, err := GetNamespaceInode(1, "mnt")
+		if err != nil {
+			hostMntNS, _ = GetNamespaceInode(os.Getpid(), "mnt")
+		}
+		if hostMntNS != 0 && targetMntNS != hostMntNS {
+			isIsolated = true
+		}
+	}
+	if isIsolated {
+		if memLimit == "unlimited" || memLimit == "unknown" {
+			risks = append(risks, "No cgroup memory limit is enforced. A memory leak or crash loop could cause host memory exhaustion.")
+			recs = append(recs, "Enforce a cgroup memory limit (e.g. via Docker's '--memory' option or systemd's 'MemoryMax' setting).")
+			scoreReduction += 10
+		}
+		if pidsLimit == "unlimited" || pidsLimit == "unknown" {
+			risks = append(risks, "No cgroup process/thread limit is enforced. The namespace could exhaust host PIDs via a fork bomb.")
+			recs = append(recs, "Enforce a cgroup PIDs limit (e.g. via Docker's '--pids-limit' or systemd's 'TasksMax' setting).")
+			scoreReduction += 10
+		}
+	}
+
 	finalScore := 100 - scoreReduction
 	if finalScore < 0 {
 		finalScore = 0
 	}
 
 	return &SecurityAuditResult{
-		UID:             uid,
-		EUID:            euid,
-		GID:             gid,
-		EGID:            egid,
-		SeccompMode:     seccompMode,
-		NoNewPrivs:      noNewPrivs,
-		LSMProfile:      lsmProfile,
-		UserNSMapped:    isRootless,
-		Risks:           risks,
-		Recommendations: recs,
-		Score:           finalScore,
+		UID:               uid,
+		EUID:              euid,
+		GID:               gid,
+		EGID:              egid,
+		SeccompMode:       seccompMode,
+		NoNewPrivs:        noNewPrivs,
+		LSMProfile:        lsmProfile,
+		UserNSMapped:      isRootless,
+		SetgroupsStatus:   setgroupsStatus,
+		InitProcessName:   initProcName,
+		CgroupMemoryLimit: memLimit,
+		CgroupPidsLimit:   pidsLimit,
+		Risks:             risks,
+		Recommendations:   recs,
+		Score:             finalScore,
 	}, nil
+}
+
+// GetSetgroupsStatus retrieves the setgroups permission status for the process.
+func GetSetgroupsStatus(pid int) string {
+	setgroupsPath := util.ProcPath(pid, "setgroups")
+	data, err := os.ReadFile(setgroupsPath)
+	if err != nil {
+		return "unsupported"
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// FindPID1Name scans /proc to find the process name running as PID 1 inside the target's PID namespace.
+func FindPID1Name(targetPID int) (string, error) {
+	targetNS, err := GetNamespaceInode(targetPID, "pid")
+	if err != nil {
+		return "", err
+	}
+
+	hostPidNS, err := GetNamespaceInode(1, "pid")
+	if err != nil {
+		hostPidNS, _ = GetNamespaceInode(os.Getpid(), "pid")
+	}
+
+	// If sharing host PID namespace, PID 1 is the system init.
+	if hostPidNS != 0 && targetNS == hostPidNS {
+		name, err := util.GetProcessName(1)
+		if err != nil {
+			return "systemd", nil
+		}
+		return name, nil
+	}
+
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 1 {
+			continue
+		}
+		ns, err := GetNamespaceInode(pid, "pid")
+		if err != nil || ns != targetNS {
+			continue
+		}
+		statusPath := util.ProcPath(pid, "status")
+		kv, err := util.ParseKeyValuePair(statusPath)
+		if err == nil {
+			nspidVal, hasNSpid := kv["NSpid"]
+			if hasNSpid {
+				fields := strings.Fields(nspidVal)
+				if len(fields) > 0 {
+					lastPID := fields[len(fields)-1]
+					if lastPID == "1" {
+						name, err := util.GetProcessName(pid)
+						if err == nil {
+							return name, nil
+						}
+					}
+				}
+			}
+		}
+	}
+	return "unknown", fmt.Errorf("could not find PID 1 in namespace")
+}
+
+// GetCgroupLimits resolves cgroup resource limits for memory and PIDs.
+func GetCgroupLimits(pid int) (string, string) {
+	cgroupPath := util.ProcPath(pid, "cgroup")
+	data, err := os.ReadFile(cgroupPath)
+	if err != nil {
+		return "unknown", "unknown"
+	}
+
+	var cgPath string
+	isV2 := false
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Cgroup v2 is "0::/path"
+		if strings.HasPrefix(line, "0::") {
+			cgPath = line[3:]
+			isV2 = true
+			break
+		}
+		// Cgroup v1 fallback for memory controller
+		parts := strings.Split(line, ":")
+		if len(parts) == 3 && strings.Contains(parts[1], "memory") {
+			cgPath = parts[2]
+		}
+	}
+
+	if cgPath == "" || cgPath == "/" {
+		return "unlimited", "unlimited"
+	}
+
+	memLimit := "unlimited"
+	pidsLimit := "unlimited"
+
+	if isV2 {
+		memFile := fmt.Sprintf("/sys/fs/cgroup%s/memory.max", cgPath)
+		if mData, err := os.ReadFile(memFile); err == nil {
+			val := strings.TrimSpace(string(mData))
+			if val == "max" {
+				memLimit = "unlimited"
+			} else {
+				memLimit = val
+			}
+		} else if os.IsPermission(err) {
+			memLimit = "restricted"
+		} else {
+			memLimit = "unknown"
+		}
+
+		pidsFile := fmt.Sprintf("/sys/fs/cgroup%s/pids.max", cgPath)
+		if pData, err := os.ReadFile(pidsFile); err == nil {
+			val := strings.TrimSpace(string(pData))
+			if val == "max" {
+				pidsLimit = "unlimited"
+			} else {
+				pidsLimit = val
+			}
+		} else if os.IsPermission(err) {
+			pidsLimit = "restricted"
+		} else {
+			pidsLimit = "unknown"
+		}
+	} else {
+		memFile := fmt.Sprintf("/sys/fs/cgroup/memory%s/memory.limit_in_bytes", cgPath)
+		if mData, err := os.ReadFile(memFile); err == nil {
+			val := strings.TrimSpace(string(mData))
+			if val != "" && !strings.HasPrefix(val, "922337203") {
+				memLimit = val
+			}
+		} else if os.IsPermission(err) {
+			memLimit = "restricted"
+		} else {
+			memLimit = "unknown"
+		}
+
+		pidsFile := fmt.Sprintf("/sys/fs/cgroup/pids%s/pids.max", cgPath)
+		if pData, err := os.ReadFile(pidsFile); err == nil {
+			val := strings.TrimSpace(string(pData))
+			if val == "max" {
+				pidsLimit = "unlimited"
+			} else if val != "" {
+				pidsLimit = val
+			}
+		} else if os.IsPermission(err) {
+			pidsLimit = "restricted"
+		} else {
+			pidsLimit = "unknown"
+		}
+	}
+
+	return memLimit, pidsLimit
 }
