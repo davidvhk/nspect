@@ -18,6 +18,7 @@ type AuditReport struct {
 	Env          *EnvAuditResult       `json:"environment"`
 	Network      *NetAuditResult       `json:"network"`
 	FD           *FDAuditResult        `json:"file_descriptors"`
+	Filesystem   *FilesystemAuditResult `json:"filesystem"`
 	OverallScore int                   `json:"overall_score"`
 }
 
@@ -58,9 +59,14 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		fdResult = &FDAuditResult{FDs: nil, Score: 100}
 	}
 
+	fsResult, err := AuditFilesystem(pid)
+	if err != nil {
+		fsResult = &FilesystemAuditResult{Risks: nil, Score: 100}
+	}
+
 	// Calculate overall score (weighted average)
-	// Weights: Namespaces (25%), Capabilities (25%), Mounts (15%), Security Context (15%), Env (10%), FD (10%)
-	overall := (nsResult.Score*25 + capResult.Score*25 + mountResult.Score*15 + secResult.Score*15 + envResult.Score*10 + fdResult.Score*10) / 100
+	// Weights: Namespaces (20%), Capabilities (20%), Mounts (15%), Security Context (15%), Env (10%), Filesystem (10%), FD (10%)
+	overall := (nsResult.Score*20 + capResult.Score*20 + mountResult.Score*15 + secResult.Score*15 + envResult.Score*10 + fsResult.Score*10 + fdResult.Score*10) / 100
 
 	return &AuditReport{
 		PID:          pid,
@@ -73,6 +79,7 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		Env:          envResult,
 		Network:      netResult,
 		FD:           fdResult,
+		Filesystem:   fsResult,
 		OverallScore: overall,
 	}, nil
 }
@@ -329,10 +336,31 @@ func (r *AuditReport) RenderCLI() string {
 	}
 	sb.WriteString("\n")
 
+	// 8. Filesystem Audit
+	sb.WriteString(fmt.Sprintf("%s[8] CONTAINER FILESYSTEM AUDIT%s (Score: %d/100)\n", Bold+Underline, Reset, r.Filesystem.Score))
+	if len(r.Filesystem.Risks) > 0 {
+		sb.WriteString(fmt.Sprintf("  %s%sFilesystem Risks Discovered:%s\n", Bold, Red, Reset))
+		for _, fr := range r.Filesystem.Risks {
+			color := Red
+			if fr.RiskLevel == "Medium" {
+				color = Yellow
+			} else if fr.RiskLevel == "Low" {
+				color = Gray
+			}
+			sb.WriteString(fmt.Sprintf("    * %s%s%s (%s): %s\n", Bold, color, fr.Path, fr.RiskLevel, Reset+fr.Description))
+		}
+	} else {
+		sb.WriteString("  - No sensitive SUID/SGID files, insecure permissions, or environment secrets found in filesystem.\n")
+	}
+	sb.WriteString("\n")
+
 	// Summary Recommendation
 	recs := append([]string{}, r.Security.Recommendations...)
 	if r.Mounts != nil {
 		recs = append(recs, r.Mounts.Recommendations...)
+	}
+	if r.Filesystem != nil {
+		recs = append(recs, r.Filesystem.Recommendations...)
 	}
 	if len(r.Env.Secrets) > 0 {
 		recs = append(recs, "Do not expose passwords, API keys, or security tokens in environment variables. Use secret stores (e.g. Docker Secrets, K8s Secrets, HashiCorp Vault) or mount credentials securely as files.")

@@ -76,11 +76,12 @@ func TestParseMountInfoLine(t *testing.T) {
 
 func TestAuditMountsInternal(t *testing.T) {
 	tests := []struct {
-		name       string
-		mounts     []MountInfo
-		lsmProfile string
-		wantRisks  int
-		wantScore  int
+		name           string
+		mounts         []MountInfo
+		lsmProfile     string
+		isUnprivileged bool
+		wantRisks      int
+		wantScore      int
 	}{
 		{
 			name: "Insecure external volume missing all hardening flags",
@@ -92,9 +93,10 @@ func TestAuditMountsInternal(t *testing.T) {
 					MountOptions: []string{"rw", "relatime"},
 				},
 			},
-			lsmProfile: "none",
-			wantRisks:  4, // nosuid, nodev, noexec, nosymfollow
-			wantScore:  50, // 100 - (15 + 15 + 10 + 10) = 50
+			lsmProfile:     "none",
+			isUnprivileged: false,
+			wantRisks:      4, // nosuid, nodev, noexec, nosymfollow
+			wantScore:      50, // 100 - (15 + 15 + 10 + 10) = 50
 		},
 		{
 			name: "Fully hardened external volume",
@@ -106,9 +108,10 @@ func TestAuditMountsInternal(t *testing.T) {
 					MountOptions: []string{"rw", "nosuid", "nodev", "noexec", "nosymfollow"},
 				},
 			},
-			lsmProfile: "none",
-			wantRisks:  0,
-			wantScore:  100,
+			lsmProfile:     "none",
+			isUnprivileged: false,
+			wantRisks:      0,
+			wantScore:      100,
 		},
 		{
 			name: "Insecure NFS mount",
@@ -120,9 +123,10 @@ func TestAuditMountsInternal(t *testing.T) {
 					MountOptions: []string{"rw", "sec=sys", "proto=udp", "vers=3"},
 				},
 			},
-			lsmProfile: "none",
-			wantRisks:  7, // 4 general flags + 3 nfs flags (sec=sys, proto=udp, NFSv3)
-			wantScore:  34, // 100 - (15+15+10+10+10+3+3) = 34
+			lsmProfile:     "none",
+			isUnprivileged: false,
+			wantRisks:      7, // 4 general flags + 3 nfs flags (sec=sys, proto=udp, NFSv3)
+			wantScore:      34, // 100 - (15+15+10+10+16) = 34
 		},
 		{
 			name: "Hardened NFS mount",
@@ -134,15 +138,61 @@ func TestAuditMountsInternal(t *testing.T) {
 					MountOptions: []string{"rw", "nosuid", "nodev", "noexec", "nosymfollow", "sec=krb5p", "proto=tcp"},
 				},
 			},
-			lsmProfile: "none",
-			wantRisks:  0,
-			wantScore:  100,
+			lsmProfile:     "none",
+			isUnprivileged: false,
+			wantRisks:      0,
+			wantScore:      100,
+		},
+		{
+			name: "Insecure external volume in unprivileged user ns (nodev downgraded)",
+			mounts: []MountInfo{
+				{
+					MountPoint:   "/data",
+					MountSource:  "/dev/sdb1",
+					FSType:       "ext4",
+					MountOptions: []string{"rw", "nosuid", "noexec", "nosymfollow"}, // nodev missing
+				},
+			},
+			lsmProfile:     "none",
+			isUnprivileged: true,
+			wantRisks:      1,
+			wantScore:      95, // 100 - 5 (downgraded nodev) = 95
+		},
+		{
+			name: "Writable /sys in unprivileged user ns (downgraded to Medium)",
+			mounts: []MountInfo{
+				{
+					MountPoint:   "/sys",
+					MountSource:  "sysfs",
+					FSType:       "sysfs",
+					MountOptions: []string{"rw"},
+				},
+			},
+			lsmProfile:     "none",
+			isUnprivileged: true,
+			wantRisks:      1,
+			wantScore:      95, // 100 - 5 (downgraded writable sys) = 95
+		},
+		{
+			name: "Insecure external volume in unprivileged user ns (nosuid downgraded)",
+			mounts: []MountInfo{
+				{
+					MountPoint:   "/data",
+					MountSource:  "/dev/sdb1",
+					FSType:       "ext4",
+					MountOptions: []string{"rw", "nodev", "noexec", "nosymfollow"}, // nosuid missing
+				},
+			},
+			lsmProfile:     "none",
+			isUnprivileged: true,
+			wantRisks:      1,
+			wantScore:      95, // 100 - 5 (downgraded nosuid) = 95
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res := auditMountsInternal(tt.mounts, tt.lsmProfile)
+			res := auditMountsInternal(tt.mounts, tt.lsmProfile, tt.isUnprivileged)
 			if len(res.Risks) != tt.wantRisks {
 				t.Errorf("got %d risks, want %d risks. Risks: %+v", len(res.Risks), tt.wantRisks, res.Risks)
 			}

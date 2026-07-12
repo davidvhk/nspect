@@ -3,6 +3,7 @@ package auditor
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -220,6 +221,27 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 		}
 	}
 
+	// 9. CPU SMT and Core Scheduling advisory
+	smtActive := false
+	if smtData, err := os.ReadFile("/sys/devices/system/cpu/smt/active"); err == nil {
+		if strings.TrimSpace(string(smtData)) == "1" {
+			smtActive = true
+		}
+	} else if smtControl, err := os.ReadFile("/sys/devices/system/cpu/smt/control"); err == nil {
+		if strings.TrimSpace(string(smtControl)) == "on" {
+			smtActive = true
+		}
+	}
+	if smtActive {
+		risks = append(risks, "CPU SMT (Hyper-Threading) is active on the host. In multi-tenant environments, ensure CPU Core Scheduling (PR_SCHED_CORE) is enforced by the orchestrator to mitigate side-channel leaks (e.g. Spectre, MDS).")
+	}
+
+	// 10. GID Map Privilege checks
+	checkGIDMapPrivilege(pid, &risks, &recs, &scoreReduction)
+
+	// 11. Kernel Helper Writability checks
+	checkKernelHelperWritability(pid, &risks, &recs, &scoreReduction)
+
 	finalScore := 100 - scoreReduction
 	if finalScore < 0 {
 		finalScore = 0
@@ -405,4 +427,100 @@ func GetCgroupLimits(pid int) (string, string) {
 	}
 
 	return memLimit, pidsLimit
+}
+
+// getSensitiveGIDs parses host /etc/group to retrieve GIDs for sensitive administrative groups.
+func getSensitiveGIDs() map[int]string {
+	sensitiveNames := map[string]bool{
+		"docker": true, "sudo": true, "wheel": true, "disk": true, "lxd": true, "libvirt": true, "shadow": true, "adm": true,
+	}
+	result := make(map[int]string)
+	
+	// Read /etc/group
+	data, err := os.ReadFile("/etc/group")
+	if err != nil {
+		// Fallback to default GIDs if we can't read it
+		defaults := map[int]string{
+			0: "root", 6: "disk", 27: "sudo", 42: "shadow", 999: "docker", 998: "docker",
+		}
+		return defaults
+	}
+	
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Split(line, ":")
+		if len(parts) >= 3 {
+			name := parts[0]
+			gidStr := parts[2]
+			if sensitiveNames[name] || name == "root" {
+				if gid, err := strconv.Atoi(gidStr); err == nil {
+					result[gid] = name
+				}
+			}
+		}
+	}
+	return result
+}
+
+// checkGIDMapPrivilege parses GID mappings inside the user namespace to ensure no sensitive host groups are mapped.
+func checkGIDMapPrivilege(pid int, risks *[]string, recs *[]string, scoreReduction *int) {
+	gidMapPath := util.ProcPath(pid, "gid_map")
+	data, err := os.ReadFile(gidMapPath)
+	if err != nil {
+		return
+	}
+	
+	sensitiveGIDs := getSensitiveGIDs()
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 3 {
+			containerGID, _ := strconv.Atoi(fields[0])
+			hostGID, _ := strconv.Atoi(fields[1])
+			length, _ := strconv.Atoi(fields[2])
+			
+			// Check if any mapped host GID falls into sensitive GIDs
+			for gidVal, groupName := range sensitiveGIDs {
+				if hostGID <= gidVal && gidVal < hostGID+length {
+					// Skip container GID 0 mapping to host GID 0 as it is standard and handled by user ns mapping flags
+					if gidVal == 0 && containerGID == 0 {
+						continue
+					}
+					*risks = append(*risks, fmt.Sprintf("User namespace GID map exposes host group '%s' (GID %d) inside the container (mapped to container GID %d).", groupName, gidVal, containerGID+(gidVal-hostGID)))
+					*recs = append(*recs, fmt.Sprintf("Avoid mapping sensitive host GID %d (%s) into the container's user namespace.", gidVal, groupName))
+					*scoreReduction += 15
+				}
+			}
+		}
+	}
+}
+
+// checkKernelHelperWritability evaluates if core_pattern or uevent_helper are writable inside the container.
+func checkKernelHelperWritability(pid int, risks *[]string, recs *[]string, scoreReduction *int) {
+	helpers := []string{
+		"/proc/sys/kernel/core_pattern",
+		"/sys/kernel/uevent_helper",
+	}
+	
+	for _, h := range helpers {
+		// Construct the path from the host's perspective via /proc/[pid]/root/
+		targetPath := filepath.Join(util.ProcPath(pid, "root"), h)
+		
+		// Attempt to open the file for writing (as host-root, this checks if the mount is rw in the target namespace)
+		f, err := os.OpenFile(targetPath, os.O_WRONLY, 0)
+		if err == nil {
+			f.Close()
+			*risks = append(*risks, fmt.Sprintf("Writable kernel helper path detected: %s. An attacker can write to this file to execute arbitrary commands on the host when a crash or kernel event occurs.", h))
+			*recs = append(*recs, fmt.Sprintf("Mount the parent path of '%s' as read-only (e.g. read-only /proc or mask /proc/sys) inside the container.", h))
+			*scoreReduction += 25
+		}
+	}
 }

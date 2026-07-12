@@ -36,6 +36,8 @@ Unlike static config parsers or traditional local privilege escalation scripts (
 - **Capability Analysis:** Decodes hex capability bitmasks (`CapEff`, `CapPrm`, `CapBnd`) against a security risk matrix. Automatically adjusts risk weightings for rootless/non-root environments.
 - **Mount Exposure Scan:** Parses mount points to detect writable kernel interfaces (`/sys`, `/proc`), runtime control sockets (Docker, containerd, podman), mount propagation states (`shared`), and missing filesystem hardening flags (`nosuid`, `nodev`, `noexec`).
 - **Security Context Audit:** Audits user namespace mapping ranges (single-user vs wide translate boundaries), group ID setting policies (`setgroups`), Seccomp status, LSM profile states (AppArmor/SELinux), PID 1 init process safety (mitigating zombie leakage), cgroup resource limit enforcement (memory/PIDs constraints), and the `NoNewPrivileges` configuration.
+- **Filesystem Integrity & SUID Auditing:** Scans the target container's internal filesystem via `/proc/[pid]/root/` to detect SUID/SGID binaries (like `sudo`/`su`), world-writable system files (`/etc/passwd`, `/etc/shadow`), and packaged credentials/secrets (like `.env` files) from the host perspective.
+- **Advanced Escape & Side-Channel Checks:** Audits user namespace GID mapping ranges for host administrative groups (like `docker`, `sudo`, `wheel`), detects write access to critical kernel helper endpoints (`core_pattern`, `uevent_helper`), and alerts on host-level CPU SMT (Hyper-Threading) side-channel exposure (Spectre, MDS).
 - **Environment Secret Scanner:** Decodes `/proc/[pid]/environ` to scan for key patterns pointing to credentials, tokens, or passwords (`*PASS*`, `*SECRET*`, `*KEY*`, `*TOKEN*`), displaying them masked to avoid output leakage.
 - **Inner-Namespace Socket Analyzer:** Directly parses `/proc/[pid]/net/tcp` and `/proc/[pid]/net/tcp6` inside target network namespaces, exposing active listening ports and connections without needing namespace-entering tools.
 - **FD Leak Detector:** Catalogue `/proc/[pid]/fd/` descriptors and alerts on inherited host directories (abuseable via `openat`), raw storage blocks, or critical configuration files.
@@ -224,6 +226,328 @@ RECOMMENDED REMEDIATIONS
 
 ---
 
+### 6. Example Output for a Privileged/Host-Mapped Container (Docker)
+
+Below is an audit report of a Docker container (`immich`) running as root on the host filesystem namespace, demonstrating sensitive capabilities, environment variables (automatically masked), socket mapping, and filesystem auditing:
+
+```text
+sudo ./nspect -p 848  
+
+=== LINUX CONTAINER & SANDBOX AUDIT REPORT ===
+Target Process: immich (PID: 848)
+Command Line:  immich
+Security Score: 46/100
+------------------------------------------------------------
+
+[1] NAMESPACE ISOLATION (Score: 90/100)
+  - cgroup   : ISOLATED (Target Inode: 4026533578)
+  - ipc      : ISOLATED (Target Inode: 4026533576)
+  - mnt      : ISOLATED (Target Inode: 4026533574)
+  - net      : ISOLATED (Target Inode: 4026533579)
+  - pid      : ISOLATED (Target Inode: 4026533577)
+  - user     : SHARED WITH HOST (Target Inode: 4026531837)
+    Risk: Shares User namespace with host. No UID/GID virtualization is active.
+  - uts      : ISOLATED (Target Inode: 4026533575)
+  - time     : SHARED WITH HOST (Target Inode: 4026531834)
+    Risk: Shares time namespace with host.
+
+[2] PROCESS SECURITY CONTEXT (Score: 0/100)
+  - User Context : UID=0, EUID=0 (Root/Host Namespace)
+  - Seccomp      : Enabled (Filter)
+  - NoNewPrivs   : No
+  - LSM Status   : unconfined
+  - Setgroups    : allow
+  - PID 1 Name   : tini
+  - Cgroup Memory: unlimited
+  - Cgroup PIDs  : 377172
+  Hardening Issues Identified:
+    * Process is running as EUID 0 (root) on the host filesystem namespace. If a breakout occurs, the attacker has host root privileges.
+    * NoNewPrivs flag is not set. Subprocesses can gain new privileges via SUID binaries or file capabilities.
+    * AppArmor/SELinux profile is unconfined or disabled. The process lacks mandatory access controls (MAC).
+    * No cgroup memory limit is enforced. A memory leak or crash loop could cause host memory exhaustion.
+    * CPU SMT (Hyper-Threading) is active on the host. In multi-tenant environments, ensure CPU Core Scheduling (PR_SCHED_CORE) is enforced by the orchestrator to mitigate side-channel leaks (e.g. Spectre, MDS).
+    * User namespace GID map exposes host group 'docker' (GID 995) inside the container (mapped to container GID 995).
+    * User namespace GID map exposes host group 'adm' (GID 4) inside the container (mapped to container GID 4).
+    * User namespace GID map exposes host group 'disk' (GID 6) inside the container (mapped to container GID 6).
+    * User namespace GID map exposes host group 'wheel' (GID 10) inside the container (mapped to container GID 10).
+
+[3] LINUX CAPABILITIES (Score: 0/100)
+  - Effective Caps: CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER, CAP_FSETID, CAP_KILL, CAP_SETGID, CAP_SETUID, CAP_SETPCAP, CAP_NET_BIND_SERVICE, CAP_NET_RAW, ... (14 total)
+  Sensitive Capabilities Found:
+    * CAP_DAC_OVERRIDE (High): Bypasses all file read, write, and execute permission checks (discretionary access control). Allows reading/writing sensitive files on host/container filesystems.
+    * CAP_FOWNER (Medium): Bypasses permission checks on operations that normally require the file owner's UID to match (e.g., chmod, utime). Can change permissions of critical system files.
+    * CAP_KILL (Medium): Bypasses permission checks for sending signals to processes. Can kill process trees of other containers or host services.
+    * CAP_SETGID (Medium): Allows changing the process GID arbitrarily. Useful for gaining access to restricted group files.
+    * CAP_SETUID (Medium): Allows changing the process UID arbitrarily. Useful for privilege escalation if a service is compromised.
+    * CAP_SETPCAP (Medium): Allows modifying capability bounding sets of other processes or transferring permissions. Can be abused to escalate privileges.
+    * CAP_NET_RAW (Medium): Allows opening raw sockets. Bypasses local port binding rules and allows packet sniffing or custom packet generation (ARP spoofing, packet injection). Often dropped in hardened environments.
+    * CAP_SYS_CHROOT (Medium): Allows usage of chroot(2) to change the root directory. If combined with other misconfigurations or file descriptors leaks, chroot can be used to escape directory jails.
+    * CAP_MKNOD (High): Allows creating special files (devices) using mknod(2). If a container has this capability and has write access to a host directory or loop device, an attacker can create host raw disk device nodes (e.g., sda) and read/write host storage directly.
+
+[4] MOUNT & VOLUME EXPOSURE (Score: 30/100)
+  - Total Mount Points Evaluated: 49
+  Mount Exposures Discovered:
+    * Low overlay -> Mounted at / (overlay)
+      Description: Root filesystem is mounted read-write. Hardened containers should utilize a read-only root filesystem with ephemeral tmpfs volumes where writing is needed.
+    * Critical proc -> Mounted at /proc (proc)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * High tmpfs -> Mounted at /dev (tmpfs)
+      Description: Writable /dev or devtmpfs. Allows processes (with CAP_MKNOD or raw device write) to create raw physical drive nodes (e.g. sda) and read/write host filesystems directly.
+    * High tmpfs -> Mounted at /dev (tmpfs)
+      Description: Writable volume/bind mount /dev is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium tmpfs -> Mounted at /dev (tmpfs)
+      Description: Writable volume/bind mount /dev is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium tmpfs -> Mounted at /dev (tmpfs)
+      Description: Writable volume/bind mount /dev is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * Critical cgroup -> Mounted at /sys/fs/cgroup (cgroup2)
+      Description: Writable /sys filesystem. Allows direct manipulation of kernel interfaces, cgroup configs, device configurations, or loading modules/drivers.
+    * Low shm -> Mounted at /dev/shm (tmpfs)
+      Description: Writable directory /dev/shm is missing hardening flags: nosymfollow. An attacker can write and execute files, construct SUID payloads, create device nodes, or exploit symlinks here.
+    * High /dev/mapper/pve-vm--104--disk--0 -> Mounted at /data (ext4)
+      Description: Writable volume/bind mount /data is missing the 'nosuid' flag. An attacker can write SUID binaries to this volume, which can be executed (e.g., on the host or other namespaces) to escalate privileges.
+    * High /dev/mapper/pve-vm--104--disk--0 -> Mounted at /data (ext4)
+      Description: Writable volume/bind mount /data is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium /dev/mapper/pve-vm--104--disk--0 -> Mounted at /data (ext4)
+      Description: Writable volume/bind mount /data is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium /dev/mapper/pve-vm--104--disk--0 -> Mounted at /data (ext4)
+      Description: Writable volume/bind mount /data is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * High /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/resolv.conf (ext4)
+      Description: Writable volume/bind mount /etc/resolv.conf is missing the 'nosuid' flag. An attacker can write SUID binaries to this volume, which can be executed (e.g., on the host or other namespaces) to escalate privileges.
+    * High /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/resolv.conf (ext4)
+      Description: Writable volume/bind mount /etc/resolv.conf is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/resolv.conf (ext4)
+      Description: Writable volume/bind mount /etc/resolv.conf is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/resolv.conf (ext4)
+      Description: Writable volume/bind mount /etc/resolv.conf is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * High /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/hostname (ext4)
+      Description: Writable volume/bind mount /etc/hostname is missing the 'nosuid' flag. An attacker can write SUID binaries to this volume, which can be executed (e.g., on the host or other namespaces) to escalate privileges.
+    * High /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/hostname (ext4)
+      Description: Writable volume/bind mount /etc/hostname is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/hostname (ext4)
+      Description: Writable volume/bind mount /etc/hostname is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/hostname (ext4)
+      Description: Writable volume/bind mount /etc/hostname is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * High /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/hosts (ext4)
+      Description: Writable volume/bind mount /etc/hosts is missing the 'nosuid' flag. An attacker can write SUID binaries to this volume, which can be executed (e.g., on the host or other namespaces) to escalate privileges.
+    * High /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/hosts (ext4)
+      Description: Writable volume/bind mount /etc/hosts is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/hosts (ext4)
+      Description: Writable volume/bind mount /etc/hosts is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium /dev/mapper/pve-vm--104--disk--0 -> Mounted at /etc/hosts (ext4)
+      Description: Writable volume/bind mount /etc/hosts is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * High 192.168.1.30:/photobox -> Mounted at /mnt/media/photobox (nfs)
+      Description: Writable volume/bind mount /mnt/media/photobox is missing the 'nosuid' flag. An attacker can write SUID binaries to this volume, which can be executed (e.g., on the host or other namespaces) to escalate privileges.
+    * High 192.168.1.30:/photobox -> Mounted at /mnt/media/photobox (nfs)
+      Description: Writable volume/bind mount /mnt/media/photobox is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium 192.168.1.30:/photobox -> Mounted at /mnt/media/photobox (nfs)
+      Description: Writable volume/bind mount /mnt/media/photobox is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium 192.168.1.30:/photobox -> Mounted at /mnt/media/photobox (nfs)
+      Description: Writable volume/bind mount /mnt/media/photobox is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * Medium 192.168.1.30:/photobox -> Mounted at /mnt/media/photobox (nfs)
+      Description: NFS mount /mnt/media/photobox uses weak 'sec=sys' authentication (or defaults to it). It relies on the client system to assert UIDs/GIDs over the network without cryptographic verification, allowing identity spoofing.
+    * Low 192.168.1.30:/photobox -> Mounted at /mnt/media/photobox (nfs)
+      Description: NFS mount /mnt/media/photobox uses NFSv3 (or earlier). NFSv3 lacks modern security features of NFSv4, such as strong state tracking, integrated ACLs, and single-port operation.
+    * High /dev/mapper/pve-vm--104--disk--0 -> Mounted at /usr/src/app/upload (ext4)
+      Description: Writable volume/bind mount /usr/src/app/upload is missing the 'nosuid' flag. An attacker can write SUID binaries to this volume, which can be executed (e.g., on the host or other namespaces) to escalate privileges.
+    * High /dev/mapper/pve-vm--104--disk--0 -> Mounted at /usr/src/app/upload (ext4)
+      Description: Writable volume/bind mount /usr/src/app/upload is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium /dev/mapper/pve-vm--104--disk--0 -> Mounted at /usr/src/app/upload (ext4)
+      Description: Writable volume/bind mount /usr/src/app/upload is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium /dev/mapper/pve-vm--104--disk--0 -> Mounted at /usr/src/app/upload (ext4)
+      Description: Writable volume/bind mount /usr/src/app/upload is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * Critical proc -> Mounted at /proc/bus (proc)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * Critical proc -> Mounted at /proc/fs (proc)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * Critical proc -> Mounted at /proc/irq (proc)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * Critical proc -> Mounted at /proc/sys (proc)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * Critical proc -> Mounted at /proc/sysrq-trigger (proc)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * Critical tmpfs -> Mounted at /proc/interrupts (tmpfs)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * High tmpfs -> Mounted at /proc/interrupts (tmpfs)
+      Description: Writable volume/bind mount /proc/interrupts is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium tmpfs -> Mounted at /proc/interrupts (tmpfs)
+      Description: Writable volume/bind mount /proc/interrupts is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium tmpfs -> Mounted at /proc/interrupts (tmpfs)
+      Description: Writable volume/bind mount /proc/interrupts is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * Critical tmpfs -> Mounted at /proc/kcore (tmpfs)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * High tmpfs -> Mounted at /proc/kcore (tmpfs)
+      Description: Writable volume/bind mount /proc/kcore is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium tmpfs -> Mounted at /proc/kcore (tmpfs)
+      Description: Writable volume/bind mount /proc/kcore is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium tmpfs -> Mounted at /proc/kcore (tmpfs)
+      Description: Writable volume/bind mount /proc/kcore is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * Critical tmpfs -> Mounted at /proc/keys (tmpfs)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * High tmpfs -> Mounted at /proc/keys (tmpfs)
+      Description: Writable volume/bind mount /proc/keys is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium tmpfs -> Mounted at /proc/keys (tmpfs)
+      Description: Writable volume/bind mount /proc/keys is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium tmpfs -> Mounted at /proc/keys (tmpfs)
+      Description: Writable volume/bind mount /proc/keys is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * Critical tmpfs -> Mounted at /proc/latency_stats (tmpfs)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * High tmpfs -> Mounted at /proc/latency_stats (tmpfs)
+      Description: Writable volume/bind mount /proc/latency_stats is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium tmpfs -> Mounted at /proc/latency_stats (tmpfs)
+      Description: Writable volume/bind mount /proc/latency_stats is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium tmpfs -> Mounted at /proc/latency_stats (tmpfs)
+      Description: Writable volume/bind mount /proc/latency_stats is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+    * Critical tmpfs -> Mounted at /proc/timer_list (tmpfs)
+      Description: Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.
+    * High tmpfs -> Mounted at /proc/timer_list (tmpfs)
+      Description: Writable volume/bind mount /proc/timer_list is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.
+    * Medium tmpfs -> Mounted at /proc/timer_list (tmpfs)
+      Description: Writable volume/bind mount /proc/timer_list is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.
+    * Medium tmpfs -> Mounted at /proc/timer_list (tmpfs)
+      Description: Writable volume/bind mount /proc/timer_list is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.
+
+[5] FILE DESCRIPTOR LEAK SCAN (Score: 100/100)
+  - Total File Descriptors Open: 84
+  - No dangerous host file descriptors or sensitive file access detected.
+
+[6] ENVIRONMENT SECRET SCAN (Score: 70/100)
+  Sensitive Keys Exposed:
+    * DB_PASSWORD = **********
+    * NODE_TLS_REJECT_UNAUTHORIZED = 0
+
+[7] INNER-NAMESPACE NETWORK SOCKETS
+  - Active Listening Ports:
+    * [tcp] 127.0.0.11:46137
+    * [tcp6] :::38639 (EXPOSED TO NETWORK)
+    * [tcp6] :::2283 (EXPOSED TO NETWORK)
+  - Established Connections:
+    * [tcp] 172.18.0.4:52478 -> 172.18.0.5:5432
+    * [tcp] 172.18.0.4:52316 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52320 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52332 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52344 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52348 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52350 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52362 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52370 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52376 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52386 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52398 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52402 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52414 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52428 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52438 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52442 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52448 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52450 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52464 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52466 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52478 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52482 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52498 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52502 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52516 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52530 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52532 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52546 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52562 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52564 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52568 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52574 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52576 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52584 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52588 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52592 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52598 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52610 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52616 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52620 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52630 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52644 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52654 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52670 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52672 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52674 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52686 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52702 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52714 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52718 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52734 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52740 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52746 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52752 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52768 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52776 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52782 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52784 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52794 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52798 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52808 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52818 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52820 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52830 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52838 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52850 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52860 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52870 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52880 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52896 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52902 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52916 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52922 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52930 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52932 -> 172.18.0.2:6379
+    * [tcp] 172.18.0.4:52948 -> 172.18.0.2:6379
+
+[8] CONTAINER FILESYSTEM AUDIT (Score: 70/100)
+  Filesystem Risks Discovered:
+    * /bin/chage (Medium): SUID/SGID binary found inside container: /bin/chage. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /bin/chfn (High): SUID/SGID binary found inside container: /bin/chfn. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /bin/chsh (High): SUID/SGID binary found inside container: /bin/chsh. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /bin/expiry (Medium): SUID/SGID binary found inside container: /bin/expiry. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /bin/gpasswd (Medium): SUID/SGID binary found inside container: /bin/gpasswd. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /bin/mount (Medium): SUID/SGID binary found inside container: /bin/mount. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /bin/newgrp (Medium): SUID/SGID binary found inside container: /bin/newgrp. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /bin/passwd (Medium): SUID/SGID binary found inside container: /bin/passwd. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /bin/su (High): SUID/SGID binary found inside container: /bin/su. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /bin/umount (Medium): SUID/SGID binary found inside container: /bin/umount. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /sbin/unix_chkpwd (Medium): SUID/SGID binary found inside container: /sbin/unix_chkpwd. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/bin/chage (Medium): SUID/SGID binary found inside container: /usr/bin/chage. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/bin/chfn (High): SUID/SGID binary found inside container: /usr/bin/chfn. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/bin/chsh (High): SUID/SGID binary found inside container: /usr/bin/chsh. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/bin/expiry (Medium): SUID/SGID binary found inside container: /usr/bin/expiry. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/bin/gpasswd (Medium): SUID/SGID binary found inside container: /usr/bin/gpasswd. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/bin/mount (Medium): SUID/SGID binary found inside container: /usr/bin/mount. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/bin/newgrp (Medium): SUID/SGID binary found inside container: /usr/bin/newgrp. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/bin/passwd (Medium): SUID/SGID binary found inside container: /usr/bin/passwd. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/bin/su (High): SUID/SGID binary found inside container: /usr/bin/su. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/bin/umount (Medium): SUID/SGID binary found inside container: /usr/bin/umount. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+    * /usr/sbin/unix_chkpwd (Medium): SUID/SGID binary found inside container: /usr/sbin/unix_chkpwd. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.
+
+RECOMMENDED REMEDIATIONS
+  1. Configure the process or container to run as a non-root user (UID > 0), or enable user namespace mapping (rootless containers).
+  2. Set 'NoNewPrivileges=true' in systemd or '--security-opt=no-new-privileges' in Docker to prevent privilege escalation.
+  3. Apply a confined AppArmor profile (e.g. apparmor:docker-default) or enable SELinux to enforce runtime restrictions.
+  4. Enforce a cgroup memory limit (e.g. via Docker's '--memory' option or systemd's 'MemoryMax' setting).
+  5. Avoid mapping sensitive host GID 995 (docker) into the container's user namespace.
+  6. Avoid mapping sensitive host GID 4 (adm) into the container's user namespace.
+  7. Avoid mapping sensitive host GID 6 (disk) into the container's user namespace.
+  8. Avoid mapping sensitive host GID 10 (wheel) into the container's user namespace.
+  9. Mount critical volumes (especially host-bind mounts or shared directories) with the 'nosuid' option to prevent privilege escalation via SUID binaries.
+  10. Mount external/shared directories with the 'nodev' option to prevent container processes from creating or accessing raw block/character devices.
+  11. Ensure writable filesystems not hosting executable programs are mounted with the 'noexec' option to block execution of dropped binaries/payloads.
+  12. Mount user-writable directories or shared host paths with the 'nosymfollow' option to prevent symlink-following host escape vulnerabilities.
+  13. Nested container workloads detected (Docker/OverlayFS). Ensure nested containers drop CAP_MKNOD and CAP_NET_RAW, and run with '--security-opt=no-new-privileges' to block nested breakouts.
+  14. For nested Docker/LXC mount paths, configure mount options with 'nodev,nosuid,noexec' to prevent container filesystem breakouts.
+  15. Configure NFS mounts to use Kerberos authentication (e.g., 'sec=krb5', 'sec=krb5i', or 'sec=krb5p') instead of UNIX UID/GID mapping ('sec=sys') to prevent identity spoofing.
+  16. Upgrade NFS client mounts to use NFSv4 (e.g., 'vers=4') to benefit from modern security features like strong state tracking and integrated ACLs.
+  17. Remove unnecessary SUID/SGID binaries (found 22) from the container image, or run the container with '--security-opt=no-new-privileges' to block SUID execution.
+  18. Do not expose passwords, API keys, or security tokens in environment variables. Use secret stores (e.g. Docker Secrets, K8s Secrets, HashiCorp Vault) or mount credentials securely as files.
+```
+
+---
+
+
 ## Mount Auditing & Host Escape Risks
 
 When auditing filesystem mounts, `nspect` parses `/proc/[pid]/mountinfo` to evaluate mounts **from the perspective of the target process's mount namespace**. While these checks are evaluated inside the container/sandbox context, their security implications directly impact the **host boundary**:
@@ -250,8 +574,9 @@ nspect/
     │   ├── namespace.go    # Namespace inode verification
     │   ├── capability.go   # Hex capability decoder & risk matrix
     │   ├── mount.go        # mountinfo scanning & vulnerability identification
-    │   ├── security.go     # Seccomp, LSM, and credential context checks
+    │   ├── security.go     # Seccomp, LSM, credential context checks, and GID mapping / side-channel audits
     │   ├── env.go          # Environment variable secret scanner
+    │   ├── fs.go           # Container filesystem permission, SUID, and secret auditor
     │   ├── net.go          # Inner-namespace tcp/tcp6 socket parser
     │   ├── fd.go           # File descriptor leak & permission auditor
     │   └── report.go       # Formatting, scoring, and remediation compiler

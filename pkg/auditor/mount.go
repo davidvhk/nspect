@@ -180,10 +180,11 @@ func AuditMounts(pid int) (*MountAuditResult, error) {
 		}
 	}
 
-	return auditMountsInternal(mounts, lsmProfile), nil
+	isUnprivileged := CheckUnprivilegedUserNS(pid)
+	return auditMountsInternal(mounts, lsmProfile, isUnprivileged), nil
 }
 
-func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResult {
+func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged bool) *MountAuditResult {
 	lsmRestrictsWrites := false
 	if lsmProfile != "none" && lsmProfile != "unconfined" && !strings.Contains(lsmProfile, "unconfined") && !strings.Contains(lsmProfile, "(complain)") {
 		// AppArmor / SELinux active and enforcing
@@ -193,7 +194,22 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 	}
 
 	var risks []MountRisk
-	scoreReduction := 0
+	deductions := map[string]int{
+		"proc":            0,
+		"sys":             0,
+		"dev":             0,
+		"libmodules":      0,
+		"nosuid":          0,
+		"nodev":           0,
+		"noexec":          0,
+		"nosymfollow":     0,
+		"shared":          0,
+		"nfs":             0,
+		"tmpfs_scratch":   0,
+		"docker_socket":   0,
+		"root_rw":         0,
+		"host_root_mount": 0,
+	}
 
 	for _, m := range mounts {
 		isRW := hasOption(m.MountOptions, "rw") || hasOption(m.SuperOptions, "rw")
@@ -209,7 +225,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 				RiskLevel:   "Critical",
 				Description: "Docker daemon socket is exposed. A container can use this socket to run commands on the host daemon, leading directly to host root takeover.",
 			})
-			scoreReduction += 40
+			deductions["docker_socket"] += 40
 		} else if strings.Contains(srcLower, "containerd.sock") || strings.Contains(pointLower, "containerd.sock") ||
 			strings.Contains(srcLower, "podman.sock") || strings.Contains(pointLower, "podman.sock") ||
 			strings.Contains(srcLower, "lxd.sock") || strings.Contains(pointLower, "lxd.sock") {
@@ -220,7 +236,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 				RiskLevel:   "Critical",
 				Description: "Container runtime control socket is exposed, allowing direct container bypass and host escape.",
 			})
-			scoreReduction += 40
+			deductions["docker_socket"] += 40
 		}
 
 		// 2. Sensitive paths (procfs, sysfs, hosts/devs)
@@ -235,6 +251,15 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 						RiskLevel:   "Info",
 						Description: fmt.Sprintf("Writable /proc filesystem mount detected, but write access is restricted by the active LSM profile (%s), preventing security exposure.", lsmProfile),
 					})
+				} else if isUnprivileged {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Medium",
+						Description: "[Sandboxed by User Namespace] Writable /proc filesystem. While normally critical, user namespace mapping restricts write access to global kernel parameters from the host perspective.",
+					})
+					deductions["proc"] += 10
 				} else {
 					risks = append(risks, MountRisk{
 						MountPoint:  m.MountPoint,
@@ -243,7 +268,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 						RiskLevel:   "Critical",
 						Description: "Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.",
 					})
-					scoreReduction += 35
+					deductions["proc"] += 35
 				}
 			} else if m.MountPoint == "/sys" || strings.HasPrefix(m.MountPoint, "/sys/") {
 				// Writable /sys is extremely dangerous unless protected by LSM
@@ -255,6 +280,15 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 						RiskLevel:   "Info",
 						Description: fmt.Sprintf("Writable /sys filesystem mount detected, but write access is restricted by the active LSM profile (%s), preventing security exposure.", lsmProfile),
 					})
+				} else if isUnprivileged {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Medium",
+						Description: "[Sandboxed by User Namespace] Writable /sys filesystem. While normally critical, user namespace mapping restricts modification of global host cgroups and device configurations.",
+					})
+					deductions["sys"] += 10
 				} else {
 					risks = append(risks, MountRisk{
 						MountPoint:  m.MountPoint,
@@ -263,17 +297,28 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 						RiskLevel:   "Critical",
 						Description: "Writable /sys filesystem. Allows direct manipulation of kernel interfaces, cgroup configs, device configurations, or loading modules/drivers.",
 					})
-					scoreReduction += 35
+					deductions["sys"] += 35
 				}
 			} else if m.MountPoint == "/dev" || m.FSType == "devtmpfs" {
-				risks = append(risks, MountRisk{
-					MountPoint:  m.MountPoint,
-					MountSource: m.MountSource,
-					FSType:      m.FSType,
-					RiskLevel:   "High",
-					Description: "Writable /dev or devtmpfs. Allows processes (with CAP_MKNOD or raw device write) to create raw physical drive nodes (e.g. sda) and read/write host filesystems directly.",
-				})
-				scoreReduction += 30
+				if isUnprivileged {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Medium",
+						Description: "[Sandboxed by User Namespace] Writable /dev or devtmpfs. While normally high risk, user namespace mapping prevents the creation of new physical device nodes (CAP_MKNOD is restricted).",
+					})
+					deductions["dev"] += 10
+				} else {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "High",
+						Description: "Writable /dev or devtmpfs. Allows processes (with CAP_MKNOD or raw device write) to create raw physical drive nodes (e.g. sda) and read/write host filesystems directly.",
+					})
+					deductions["dev"] += 30
+				}
 			} else if strings.HasPrefix(m.MountPoint, "/lib/modules") || strings.Contains(srcLower, "/lib/modules") {
 				risks = append(risks, MountRisk{
 					MountPoint:  m.MountPoint,
@@ -282,7 +327,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 					RiskLevel:   "Critical",
 					Description: "Writable /lib/modules host path is exposed. Enables replacing host kernel modules, allowing execution of code directly in host kernel context.",
 				})
-				scoreReduction += 35
+				deductions["libmodules"] += 35
 			} else if m.MountPoint == "/" {
 				// Standard containers have writable root, but hardened ones might set read-only root.
 				// We classify this as Low or Info. Let's make it Info/Low since it's normal but good to note.
@@ -293,7 +338,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 					RiskLevel:   "Low",
 					Description: "Root filesystem is mounted read-write. Hardened containers should utilize a read-only root filesystem with ephemeral tmpfs volumes where writing is needed.",
 				})
-				scoreReduction += 5
+				deductions["root_rw"] += 5
 			}
 		}
 
@@ -321,7 +366,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 					RiskLevel:   "Low",
 					Description: fmt.Sprintf("Writable directory %s is missing hardening flags: %s. An attacker can write and execute files, construct SUID payloads, create device nodes, or exploit symlinks here.", m.MountPoint, strings.Join(missingFlags, ", ")),
 				})
-				scoreReduction += 3 * len(missingFlags)
+				deductions["tmpfs_scratch"] += 3 * len(missingFlags)
 			}
 		}
 
@@ -337,7 +382,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 				RiskLevel:   "High",
 				Description: "Exposed writeable host root directory. Gives direct access to the host's filesystem, bypassing all file isolation.",
 			})
-			scoreReduction += 30
+			deductions["host_root_mount"] += 30
 		}
 
 		// 5. General Mount Hardening Flags on external/bind/network/tmpfs mounts
@@ -345,24 +390,46 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 			m.MountPoint != "/tmp" && m.MountPoint != "/dev/shm" && m.MountPoint != "/run/lock" {
 			
 			if !hasOption(m.MountOptions, "nosuid") && !hasOption(m.SuperOptions, "nosuid") {
-				risks = append(risks, MountRisk{
-					MountPoint:  m.MountPoint,
-					MountSource: m.MountSource,
-					FSType:      m.FSType,
-					RiskLevel:   "High",
-					Description: fmt.Sprintf("Writable volume/bind mount %s is missing the 'nosuid' flag. An attacker can write SUID binaries to this volume, which can be executed (e.g., on the host or other namespaces) to escalate privileges.", m.MountPoint),
-				})
-				scoreReduction += 15
+				if isUnprivileged {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Low",
+						Description: fmt.Sprintf("[Sandboxed by User Namespace] Writable volume/bind mount %s is missing the 'nosuid' flag. Risk is low as any SUID binary written here will only execute with mapped unprivileged UIDs, preventing host privilege escalation.", m.MountPoint),
+					})
+					deductions["nosuid"] += 5
+				} else {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "High",
+						Description: fmt.Sprintf("Writable volume/bind mount %s is missing the 'nosuid' flag. An attacker can write SUID binaries to this volume, which can be executed (e.g., on the host or other namespaces) to escalate privileges.", m.MountPoint),
+					})
+					deductions["nosuid"] += 15
+				}
 			}
 			if !hasOption(m.MountOptions, "nodev") && !hasOption(m.SuperOptions, "nodev") {
-				risks = append(risks, MountRisk{
-					MountPoint:  m.MountPoint,
-					MountSource: m.MountSource,
-					FSType:      m.FSType,
-					RiskLevel:   "High",
-					Description: fmt.Sprintf("Writable volume/bind mount %s is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.", m.MountPoint),
-				})
-				scoreReduction += 15
+				if isUnprivileged {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Low",
+						Description: fmt.Sprintf("[Sandboxed by User Namespace] Writable volume/bind mount %s is missing the 'nodev' flag. Risk is low as user namespace blocks CAP_MKNOD.", m.MountPoint),
+					})
+					deductions["nodev"] += 5
+				} else {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "High",
+						Description: fmt.Sprintf("Writable volume/bind mount %s is missing the 'nodev' flag. An attacker with CAP_MKNOD capability can create device nodes on this filesystem to access host hardware directly.", m.MountPoint),
+					})
+					deductions["nodev"] += 15
+				}
 			}
 			if !hasOption(m.MountOptions, "noexec") && !hasOption(m.SuperOptions, "noexec") {
 				risks = append(risks, MountRisk{
@@ -372,7 +439,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 					RiskLevel:   "Medium",
 					Description: fmt.Sprintf("Writable volume/bind mount %s is missing the 'noexec' flag. This allows execution of binaries directly from the volume, facilitating the execution of compiled payloads.", m.MountPoint),
 				})
-				scoreReduction += 10
+				deductions["noexec"] += 10
 			}
 			if !hasOption(m.MountOptions, "nosymfollow") && !hasOption(m.SuperOptions, "nosymfollow") {
 				risks = append(risks, MountRisk{
@@ -382,7 +449,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 					RiskLevel:   "Medium",
 					Description: fmt.Sprintf("Writable volume/bind mount %s is missing the 'nosymfollow' flag. An attacker can create symbolic links pointing to sensitive host files, which could lead to a symlink-following host escape if accessed by a privileged host process.", m.MountPoint),
 				})
-				scoreReduction += 10
+				deductions["nosymfollow"] += 10
 			}
 		}
 
@@ -417,7 +484,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 					RiskLevel:   "Medium",
 					Description: fmt.Sprintf("NFS mount %s uses weak 'sec=sys' authentication (or defaults to it). It relies on the client system to assert UIDs/GIDs over the network without cryptographic verification, allowing identity spoofing.", m.MountPoint),
 				})
-				scoreReduction += 10
+				deductions["nfs"] += 10
 			}
 
 			// Check for noresvport
@@ -429,7 +496,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 					RiskLevel:   "Medium",
 					Description: fmt.Sprintf("NFS mount %s is configured with 'noresvport'. This allows the NFS client to use unprivileged source ports (>1024), bypassing source port security checks on the NFS server.", m.MountPoint),
 				})
-				scoreReduction += 5
+				deductions["nfs"] += 5
 			}
 
 			// Check for UDP protocol
@@ -443,7 +510,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 					RiskLevel:   "Low",
 					Description: fmt.Sprintf("NFS mount %s uses UDP transport protocol. UDP is stateless and susceptible to source IP spoofing and session hijacking compared to TCP.", m.MountPoint),
 				})
-				scoreReduction += 3
+				deductions["nfs"] += 3
 			}
 
 			// Check for NFSv3 or earlier
@@ -459,7 +526,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 					RiskLevel:   "Low",
 					Description: fmt.Sprintf("NFS mount %s uses NFSv3 (or earlier). NFSv3 lacks modern security features of NFSv4, such as strong state tracking, integrated ACLs, and single-port operation.", m.MountPoint),
 				})
-				scoreReduction += 3
+				deductions["nfs"] += 3
 			}
 		}
 
@@ -472,16 +539,70 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string) *MountAuditResul
 			}
 		}
 		if hasSharedPropagation && isRW {
-			risks = append(risks, MountRisk{
-				MountPoint:  m.MountPoint,
-				MountSource: m.MountSource,
-				FSType:      m.FSType,
-				RiskLevel:   "High",
-				Description: fmt.Sprintf("Mount %s is configured with shared propagation ('shared:'). Any mount or unmount event inside the namespace will propagate back to the host, posing a container escape or denial-of-service vector.", m.MountPoint),
-			})
-			scoreReduction += 20
+			if isUnprivileged {
+				risks = append(risks, MountRisk{
+					MountPoint:  m.MountPoint,
+					MountSource: m.MountSource,
+					FSType:      m.FSType,
+					RiskLevel:   "Low",
+					Description: fmt.Sprintf("[Sandboxed by User Namespace] Mount %s is configured with shared propagation. Risk is minimized by the user namespace boundary.", m.MountPoint),
+				})
+				deductions["shared"] += 5
+			} else {
+				risks = append(risks, MountRisk{
+					MountPoint:  m.MountPoint,
+					MountSource: m.MountSource,
+					FSType:      m.FSType,
+					RiskLevel:   "High",
+					Description: fmt.Sprintf("Mount %s is configured with shared propagation ('shared:'). Any mount or unmount event inside the namespace will propagate back to the host, posing a container escape or denial-of-service vector.", m.MountPoint),
+				})
+				deductions["shared"] += 20
+			}
 		}
 	}
+
+	// Apply caps per category to prevent redundant sub-mounts from dropping score to 0
+	capLimit := func(val, max int) int {
+		if val > max {
+			return max
+		}
+		return val
+	}
+
+	nonEscapeReduction := 0
+	if isUnprivileged {
+		nonEscapeReduction += capLimit(deductions["proc"], 5)
+		nonEscapeReduction += capLimit(deductions["sys"], 5)
+		nonEscapeReduction += capLimit(deductions["dev"], 5)
+		nonEscapeReduction += capLimit(deductions["shared"], 5)
+		nonEscapeReduction += capLimit(deductions["nodev"], 5)
+		nonEscapeReduction += capLimit(deductions["nosuid"], 10)
+		nonEscapeReduction += capLimit(deductions["noexec"], 10)
+		nonEscapeReduction += capLimit(deductions["nosymfollow"], 10)
+		nonEscapeReduction += capLimit(deductions["nfs"], 10)
+		nonEscapeReduction += capLimit(deductions["tmpfs_scratch"], 5)
+		nonEscapeReduction += capLimit(deductions["root_rw"], 5)
+
+		// Cap the total non-escape reduction at 30 for unprivileged containers
+		nonEscapeReduction = capLimit(nonEscapeReduction, 30)
+	} else {
+		nonEscapeReduction += capLimit(deductions["proc"], 35)
+		nonEscapeReduction += capLimit(deductions["sys"], 35)
+		nonEscapeReduction += capLimit(deductions["dev"], 30)
+		nonEscapeReduction += capLimit(deductions["shared"], 40)
+		nonEscapeReduction += capLimit(deductions["nodev"], 30)
+		nonEscapeReduction += capLimit(deductions["nosuid"], 30)
+		nonEscapeReduction += capLimit(deductions["noexec"], 20)
+		nonEscapeReduction += capLimit(deductions["nosymfollow"], 20)
+		nonEscapeReduction += capLimit(deductions["nfs"], 20)
+		nonEscapeReduction += capLimit(deductions["tmpfs_scratch"], 15)
+		nonEscapeReduction += capLimit(deductions["root_rw"], 5)
+
+		// Cap the total non-escape reduction at 70 for privileged containers
+		nonEscapeReduction = capLimit(nonEscapeReduction, 70)
+	}
+
+	scoreReduction := deductions["docker_socket"] + deductions["host_root_mount"] + deductions["libmodules"] + nonEscapeReduction
 
 	// Calculate score
 	finalScore := 100 - scoreReduction
