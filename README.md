@@ -4,6 +4,8 @@
 
 Whether validating Docker configurations, Kubernetes pods, systemd sandboxes, Snap packages, or running system processes, **nspect** parses runtime metrics directly from the `/proc` filesystem to report an overall security exposure score and recommended remediation steps.
 
+![nspect HTML Audit Dashboard Example](assets/nspect_dashboard_example.png)
+
 ---
 
 ## Why nspect is Unique
@@ -111,7 +113,18 @@ For programmatic consumption, compliance auditing, or integration with security 
 ./nspect --pid <PID> --json
 ```
 
-### 5. Example CLI Report Output
+### 5. Generate Standalone HTML Reports
+To generate a beautifully formatted, single-file static HTML report (featuring a modern dark-mode theme, collapsible accordion panels, color-coded badges, and a live client-side search filter for volume mounts):
+
+```bash
+./nspect --pid <PID> --html > report.html
+# Or using the shorthand:
+./nspect --pid <PID> -H > report.html
+```
+
+This output is completely self-contained (all styling and interaction logic is embedded inline), making it perfectly suited for sending over email, uploading as build artifacts, or reading offline in air-gapped environments.
+
+### 6. Example CLI Report Output
 
 Running `nspect` prints a comprehensive isolation dashboard:
 
@@ -226,7 +239,7 @@ RECOMMENDED REMEDIATIONS
 
 ---
 
-### 6. Example Output for a Privileged/Host-Mapped Container (Docker)
+### 7. Example Output for a Privileged/Host-Mapped Container (Docker)
 
 Below is an audit report of a Docker container (`immich`) running as root on the host filesystem namespace, demonstrating sensitive capabilities, environment variables (automatically masked), socket mapping, and filesystem auditing:
 
@@ -608,4 +621,4 @@ git push origin v0.0.1
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) - see the LICENSE file for details.

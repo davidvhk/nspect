@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"nspect/pkg/auditor"
+	"nspect/pkg/server"
 	"nspect/pkg/util"
 )
 
@@ -19,6 +20,10 @@ func printUsage() {
 	fmt.Printf("  -l, --list        List all running processes in isolated namespaces (containers/sandboxes)\n")
 	fmt.Printf("  -m, --mask        Mask sensitive environment variables instead of showing them in plaintext\n")
 	fmt.Printf("  -j, --json        Output report in JSON format\n")
+	fmt.Printf("  -H, --html        Output report in HTML format\n")
+	fmt.Printf("  -s, --server      Start lightweight web console for live auditing\n")
+	fmt.Printf("      --host <host> Host address for the web console to listen on (default: 127.0.0.1)\n")
+	fmt.Printf("      --port <port> Port for the web console to listen on (default: 8080)\n")
 	fmt.Printf("  -h, --help        Show this help message\n")
 }
 
@@ -27,7 +32,11 @@ func main() {
 	var listFlag bool
 	var maskFlag bool
 	var jsonFlag bool
+	var htmlFlag bool
 	var helpFlag bool
+	var serverFlag bool
+	var hostFlag string
+	var portFlag int
 
 	flag.StringVar(&pidFlag, "pid", "", "Audit the specified process ID")
 	flag.StringVar(&pidFlag, "p", "", "Audit the specified process ID")
@@ -37,6 +46,12 @@ func main() {
 	flag.BoolVar(&maskFlag, "m", false, "Mask sensitive environment variables")
 	flag.BoolVar(&jsonFlag, "json", false, "Output report in JSON format")
 	flag.BoolVar(&jsonFlag, "j", false, "Output report in JSON format")
+	flag.BoolVar(&htmlFlag, "html", false, "Output report in HTML format")
+	flag.BoolVar(&htmlFlag, "H", false, "Output report in HTML format")
+	flag.BoolVar(&serverFlag, "server", false, "Start lightweight web console")
+	flag.BoolVar(&serverFlag, "s", false, "Start lightweight web console")
+	flag.StringVar(&hostFlag, "host", "127.0.0.1", "Host address for the web console to listen on")
+	flag.IntVar(&portFlag, "port", 8080, "Port for the web console to listen on")
 	flag.BoolVar(&helpFlag, "help", false, "Show this help message")
 	flag.BoolVar(&helpFlag, "h", false, "Show this help message")
 
@@ -44,6 +59,15 @@ func main() {
 
 	if helpFlag {
 		printUsage()
+		os.Exit(0)
+	}
+
+	// 0. Handle Web Server
+	if serverFlag {
+		if err := server.Start(hostFlag, portFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting web server: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
@@ -111,6 +135,13 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println(jsonStr)
+	} else if htmlFlag {
+		htmlStr, err := report.RenderHTML()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to render HTML: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(htmlStr)
 	} else {
 		fmt.Println(report.RenderCLI())
 	}
