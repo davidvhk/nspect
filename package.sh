@@ -71,7 +71,7 @@ Name:           nspect
 Version:        ${VERSION}
 Release:        1
 Summary:        Linux Capability & Namespace Auditor
-License:        MIT
+License:        AGPLv3
 URL:            https://github.com/david/nspect
 Source0:        nspect-%{version}.tar.gz
 
