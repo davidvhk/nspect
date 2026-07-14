@@ -6,6 +6,9 @@ Whether validating Docker configurations, Kubernetes pods, systemd sandboxes, Sn
 
 ![nspect HTML Audit Dashboard Example](assets/nspect_dashboard_example.png)
 
+> [!IMPORTANT]
+> **nspect is designed to improve the security of the containers you build, or for educational purposes only.** It must only be used on systems you own or have explicit authorization to audit.
+
 ---
 
 ## Why nspect is Unique
@@ -124,7 +127,31 @@ To generate a beautifully formatted, single-file static HTML report (featuring a
 
 This output is completely self-contained (all styling and interaction logic is embedded inline), making it perfectly suited for sending over email, uploading as build artifacts, or reading offline in air-gapped environments.
 
-### 6. Example CLI Report Output
+### 6. Interactive Web Console & Live Dashboard
+
+You can start a lightweight web server that serves an interactive web console. The console scans host processes on the fly, monitors container health, and displays breakout walkthroughs for critical risks:
+
+```bash
+# Start the web console on default port 8080 (binds to localhost)
+./nspect --server
+
+# Bind to all network interfaces (e.g. for remote access) and change port
+./nspect --server --host 0.0.0.0 --port 9090
+```
+
+Once running, navigate to `http://localhost:8080` (or your host IP) in your browser.
+
+#### Features:
+* **Live Container Scanning**: The sidebar automatically lists active sandboxed processes and lets you audit them with one click.
+* **Manual PID Auditing**: Enter any host PID to run a live privilege assessment instantly.
+* **Interactive Escape Walkthroughs**: View custom proof-of-concept commands inline to demonstrate and test breakouts.
+* **Multi-Format Export**: Download reports directly in JSON, HTML, or compile a complete multi-page PDF on the fly.
+
+![Nspect Web Console](assets/webserver.png)
+
+![Escape Walkthrough Modal](assets/poc_commands.png)
+
+### 7. Example CLI Report Output
 
 Running `nspect` prints a comprehensive isolation dashboard:
 
