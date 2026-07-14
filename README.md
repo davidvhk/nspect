@@ -626,6 +626,39 @@ nspect/
 
 ---
 
+## CI/CD Pipeline Integration
+
+`nspect` supports integration with CI/CD systems (like GitHub Actions or GitLab CI/CD) to automatically check container containment and stop the build pipeline if security policies are violated (exits with code `1`).
+
+### CI/CD Failure Assertion Flags
+
+* `--fail-score <score>`: Fail if the overall security score is less than this value (0-100).
+* `--fail-on-shared-ns`: Fail if any namespace (`mnt`, `pid`, `net`, `ipc`, `uts`) is shared with the host.
+* `--fail-on-caps`: Fail if any Critical or High risk capabilities are active in the effective set.
+* `--fail-on-mount-risks`: Fail if any Critical, High, or Medium risk volume/mount exposures are found.
+* `--fail-on-secrets`: Fail if any sensitive credentials/secrets are detected in environment variables.
+* `--fail-on-fd-leaks`: Fail if any high-risk leaked host file descriptors are found in the target process.
+* `--fail-on-fs-risks`: Fail if any Critical, High, or Medium filesystem risks are found inside the container filesystem.
+* `--fail-on-root`: Fail if the container runs as host root (`EUID=0` and not virtualized in user namespace).
+
+### Example GitHub Actions Workflow Step
+
+To audit a container, run it in the background, find its host PID, and audit it using `nspect` (with `sudo` so it can access namespace inodes):
+
+```yaml
+- name: Audit Sandbox Boundary
+  run: |
+    # Get host PID of the container
+    CONTAINER_PID=$(docker inspect -f '{{.State.Pid}}' my-container)
+    
+    # Run audit and fail if score is below 85 or container is running as root on host
+    sudo ./nspect --pid $CONTAINER_PID --fail-score 85 --fail-on-root
+```
+
+For a comprehensive guide and complete configuration templates, see the [CI/CD Integration Guide](docs/cicd_integration.md).
+
+---
+
 ## CI/CD & Releases
 
 The project includes a GitHub Actions release pipeline. Whenever you push a version tag matching `v*` (e.g., `v0.0.1`), the pipeline will automatically:
