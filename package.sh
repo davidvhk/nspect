@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-VERSION="0.0.6"
+VERSION="0.0.7"
 ARCH="amd64"
 RPM_ARCH="x86_64"
 
