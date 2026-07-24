@@ -41,7 +41,7 @@ func Start(host string, port int) error {
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // handleHome serves the HTML dashboard UI
@@ -51,11 +51,11 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(DashboardHTML))
+	_, _ = w.Write([]byte(DashboardHTML))
 }
 
 // handleListContainers lists all isolated processes running on the host
-func handleListContainers(w http.ResponseWriter, r *http.Request) {
+func handleListContainers(w http.ResponseWriter, _ *http.Request) {
 	processes, err := auditor.FindIsolatedProcesses()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -135,7 +135,7 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=nspect_report_%d.html", pid))
-		w.Write([]byte(htmlStr))
+		_, _ = w.Write([]byte(htmlStr))
 
 	case "json":
 		jsonStr, err := report.RenderJSON()
@@ -145,7 +145,7 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=nspect_report_%d.json", pid))
-		w.Write([]byte(jsonStr))
+		_, _ = w.Write([]byte(jsonStr))
 
 	case "":
 		// Direct API response

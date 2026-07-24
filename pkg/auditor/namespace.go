@@ -176,7 +176,7 @@ func AuditNamespaces(targetPID int) (*NamespaceAuditResult, error) {
 				if isUnprivileged {
 					risk = "Low"
 					desc = "Shares UTS namespace with container root. Protected by unprivileged user namespace boundary."
-					scoreReduction += 1
+					scoreReduction++
 				} else {
 					risk = "Low"
 					desc = "Shares UTS namespace with host. The container shares the host hostname, allowing modification."

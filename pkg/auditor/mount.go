@@ -562,9 +562,9 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 	}
 
 	// Apply caps per category to prevent redundant sub-mounts from dropping score to 0
-	capLimit := func(val, max int) int {
-		if val > max {
-			return max
+	capLimit := func(val, maxVal int) int {
+		if val > maxVal {
+			return maxVal
 		}
 		return val
 	}
@@ -630,7 +630,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 	hasMissingNosymfollow := false
 	hasNfsWeakSec := false
 	hasNfsNoResvPort := false
-	hasNfsUdp := false
+	hasNfsUDP := false
 	hasNfsV3 := false
 
 	for _, r := range risks {
@@ -653,7 +653,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 			hasNfsNoResvPort = true
 		}
 		if strings.Contains(r.Description, "UDP transport") {
-			hasNfsUdp = true
+			hasNfsUDP = true
 		}
 		if strings.Contains(r.Description, "NFSv3") {
 			hasNfsV3 = true
@@ -701,7 +701,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 	if hasNfsNoResvPort {
 		recs = append(recs, "Avoid using 'noresvport' on NFS client mounts unless required, as it permits connections from unprivileged client source ports, bypassing standard export restrictions.")
 	}
-	if hasNfsUdp {
+	if hasNfsUDP {
 		recs = append(recs, "Use TCP transport ('proto=tcp') instead of UDP ('proto=udp') for NFS mounts to ensure packet delivery reliability and resist spoofing/hijacking.")
 	}
 	if hasNfsV3 {

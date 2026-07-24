@@ -127,14 +127,14 @@ func main() {
 		printProcessTable(processes)
 		fmt.Printf("\nTo audit a process from the list, run: %s --pid <PID>\n", os.Args[0])
 		os.Exit(0)
-	} else {
-		pid, err := strconv.Atoi(pidFlag)
-		if err != nil || pid <= 0 {
-			fmt.Fprintf(os.Stderr, "Invalid PID: %s\n", pidFlag)
-			os.Exit(1)
-		}
-		targetPID = pid
 	}
+
+	pid, err := strconv.Atoi(pidFlag)
+	if err != nil || pid <= 0 {
+		fmt.Fprintf(os.Stderr, "Invalid PID: %s\n", pidFlag)
+		os.Exit(1)
+	}
+	targetPID = pid
 
 	// 3. Verify PID exists
 	if !util.ProcessExists(targetPID) {

@@ -1,0 +1,23 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+    - revive
+
+linters-settings:
+  gosec:
+    severity: medium
+    excludes:
+      - G114 # Use of net/http serve function without timeouts (acceptable for local CLI dev server)
+      - G115 # Safe integer overflow conversions in low-level bitwise operations
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
