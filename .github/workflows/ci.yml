@@ -17,10 +17,11 @@ jobs:
         with:
           go-version: '1.26'
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.64.5
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.5
+
+      - name: Run Lint
+        run: make lint
 
   test-and-build:
     name: Build & Test
