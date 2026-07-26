@@ -669,17 +669,96 @@ const htmlTemplate = `<!DOCTYPE html>
                                     <td>GID={{.Security.GID}}, EGID={{.Security.EGID}}</td>
                                 </tr>
                                 <tr>
-                                    <td>Seccomp Mode</td>
+                                    <td>Seccomp Mode & Policy</td>
                                     <td>
                                         {{if eq .Security.SeccompMode 2}}
-                                        <span class="badge risk-info">Enabled (Filter)</span>
+                                            <span class="badge risk-info">Enabled (Filter)</span>
+                                            {{if .Security.SeccompDetails}}
+                                                {{if .Security.SeccompDetails.PolicyArchitecture}}
+                                                    <span class="badge {{if eq .Security.SeccompDetails.PolicyArchitecture "Default-Allow (Blacklist)"}}risk-medium{{else}}risk-info{{end}}" style="margin-left: 0.5rem;">{{.Security.SeccompDetails.PolicyArchitecture}}</span>
+                                                {{end}}
+                                            {{end}}
                                         {{else if eq .Security.SeccompMode 1}}
-                                        <span class="badge risk-info">Enabled (Strict)</span>
+                                            <span class="badge risk-info">Enabled (Strict)</span>
                                         {{else}}
-                                        <span class="badge risk-critical">Disabled</span>
+                                            <span class="badge risk-critical">Disabled</span>
+                                        {{end}}
+                                        {{if gt .Security.SeccompFilters 1}}
+                                            <span class="badge risk-medium" style="margin-left: 0.5rem;">{{.Security.SeccompFilters}} Stacked Filters</span>
+                                        {{end}}
+                                        {{if .Security.SeccompDetails}}
+                                            {{if .Security.SeccompDetails.ProfileFingerprint}}
+                                                <span class="badge risk-low" style="margin-left: 0.5rem;">{{.Security.SeccompDetails.ProfileFingerprint}}</span>
+                                            {{end}}
+                                            {{if gt .Security.SeccompDetails.InstructionCount 0}}
+                                                <span class="badge risk-info" style="margin-left: 0.5rem;">{{.Security.SeccompDetails.InstructionCount}} BPF Insns</span>
+                                            {{end}}
+                                            {{if .Security.SeccompDetails.DefaultReturnAction}}
+                                                <span class="badge risk-info" style="margin-left: 0.5rem;">Default: {{.Security.SeccompDetails.DefaultReturnAction}}</span>
+                                            {{end}}
+                                            {{if .Security.SeccompDetails.HasArgInspection}}
+                                                <span class="badge risk-low" style="margin-left: 0.5rem;">Arg Inspection ({{.Security.SeccompDetails.ArgInspectionCount}} checks)</span>
+                                            {{end}}
+                                            {{if .Security.SeccompDetails.MetadataFlags}}
+                                                <span class="badge risk-info" style="margin-left: 0.5rem;">Flags: {{range $idx, $flg := .Security.SeccompDetails.MetadataFlags}}{{if $idx}}, {{end}}{{$flg}}{{end}}</span>
+                                            {{end}}
+                                            {{if .Security.SeccompDetails.InspectedViaPtrace}}
+                                                {{if .Security.SeccompDetails.ArchValidated}}
+                                                    <span class="badge risk-low" style="margin-left: 0.5rem;">Arch Validated{{if .Security.SeccompDetails.ValidatedArchName}} ({{.Security.SeccompDetails.ValidatedArchName}}){{end}}</span>
+                                                {{else}}
+                                                    <span class="badge risk-high" style="margin-left: 0.5rem;">Arch Unvalidated (Bypass Risk)</span>
+                                                {{end}}
+                                            {{end}}
+                                            {{if gt .Security.SeccompDetails.ViolationsDetected 0}}
+                                                <span class="badge risk-critical" style="margin-left: 0.5rem;">{{.Security.SeccompDetails.ViolationsDetected}} Violation(s) Logged</span>
+                                            {{end}}
+                                            {{if .Security.SeccompDetails.InspectionNotes}}
+                                                {{if not .Security.SeccompDetails.InspectedViaPtrace}}
+                                                    <span class="badge risk-medium" style="margin-left: 0.5rem;">{{.Security.SeccompDetails.InspectionNotes}}</span>
+                                                {{end}}
+                                            {{end}}
                                         {{end}}
                                     </td>
                                 </tr>
+                                {{if .Security.SeccompDetails}}
+                                {{if .Security.SeccompDetails.AuditedSyscalls}}
+                                <tr>
+                                    <td>Audited Syscalls (BPF)</td>
+                                    <td>
+                                        <div style="max-height: 220px; overflow-y: auto;">
+                                            <table style="width: 100%; font-size: 0.8rem; border-collapse: collapse;">
+                                                <thead>
+                                                    <tr style="text-align: left; border-bottom: 1px solid var(--border-color);">
+                                                        <th style="padding: 4px;">Syscall</th>
+                                                        <th style="padding: 4px;">NR</th>
+                                                        <th style="padding: 4px;">Status</th>
+                                                        <th style="padding: 4px;">Action Details</th>
+                                                        <th style="padding: 4px;">Risk Assessment</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {{range .Security.SeccompDetails.AuditedSyscalls}}
+                                                    <tr style="border-bottom: 1px solid var(--border-color);">
+                                                        <td style="padding: 4px; font-family: monospace;"><strong>{{.Name}}</strong></td>
+                                                        <td style="padding: 4px; font-family: monospace;">{{.Syscall}}</td>
+                                                        <td style="padding: 4px;">
+                                                            {{if eq .Status "Allowed"}}
+                                                            <span class="badge risk-medium">{{.Status}}</span>
+                                                            {{else}}
+                                                            <span class="badge risk-low">{{.Status}}</span>
+                                                            {{end}}
+                                                        </td>
+                                                        <td style="padding: 4px; font-family: monospace; font-size: 0.75rem; color: var(--text-muted);">{{if .ActionDetails}}{{.ActionDetails}}{{else}}-{{end}}</td>
+                                                        <td style="padding: 4px; color: var(--text-secondary);">{{.Risk}}</td>
+                                                    </tr>
+                                                    {{end}}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {{end}}
+                                {{end}}
                                 <tr>
                                     <td>NoNewPrivs State</td>
                                     <td>

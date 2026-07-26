@@ -12,21 +12,24 @@ import (
 
 // SecurityAuditResult holds the process credentials and hardening details.
 type SecurityAuditResult struct {
-	UID               int      `json:"uid"`
-	EUID              int      `json:"euid"`
-	GID               int      `json:"gid"`
-	EGID              int      `json:"egid"`
-	SeccompMode       int      `json:"seccomp_mode"`       // 0=disabled, 1=strict, 2=filter
-	NoNewPrivs        bool     `json:"no_new_privs"`       // true/false
-	LSMProfile        string   `json:"lsm_profile"`        // apparmor, selinux, or unconfined
-	UserNSMapped      bool     `json:"usern_ns_mapped"`    // true if user namespace is virtualized (rootless)
-	SetgroupsStatus   string   `json:"setgroups_status"`   // allow or deny
-	InitProcessName   string   `json:"init_process_name"`  // PID 1 name
-	CgroupMemoryLimit string   `json:"cgroup_memory_limit"` // memory max or unlimited
-	CgroupPidsLimit   string   `json:"cgroup_pids_limit"`   // pids max or unlimited
-	Risks             []string `json:"risks"`
-	Recommendations   []string `json:"recommendations"`
-	Score             int      `json:"score"` // 0 to 100
+	UID                int                  `json:"uid"`
+	EUID               int                  `json:"euid"`
+	GID                int                  `json:"gid"`
+	EGID               int                  `json:"egid"`
+	SeccompMode        int                  `json:"seccomp_mode"`         // 0=disabled, 1=strict, 2=filter
+	SeccompFilters     int                  `json:"seccomp_filters"`      // Number of active seccomp filters
+	HasSeccompListener bool                 `json:"has_seccomp_listener"` // Seccomp user notification listener active
+	SeccompDetails     *SeccompAuditDetails `json:"seccomp_details,omitempty"`
+	NoNewPrivs         bool                 `json:"no_new_privs"`       // true/false
+	LSMProfile         string               `json:"lsm_profile"`        // apparmor, selinux, or unconfined
+	UserNSMapped       bool                 `json:"usern_ns_mapped"`    // true if user namespace is virtualized (rootless)
+	SetgroupsStatus    string               `json:"setgroups_status"`   // allow or deny
+	InitProcessName    string               `json:"init_process_name"`  // PID 1 name
+	CgroupMemoryLimit  string               `json:"cgroup_memory_limit"` // memory max or unlimited
+	CgroupPidsLimit    string               `json:"cgroup_pids_limit"`   // pids max or unlimited
+	Risks              []string             `json:"risks"`
+	Recommendations    []string             `json:"recommendations"`
+	Score              int                  `json:"score"` // 0 to 100
 }
 
 // AuditSecurity checks process level sandboxing and credential settings.
@@ -113,25 +116,7 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 		}
 	}
 
-	// 3. Seccomp Audit
-	seccompMode := 0
-	seccompVal, hasSeccomp := kv["Seccomp"]
-	if hasSeccomp {
-		seccompMode, _ = strconv.Atoi(seccompVal)
-	}
-
-	switch seccompMode {
-	case 0:
-		risks = append(risks, "Seccomp is disabled. The process can execute any Linux system call, increasing kernel attack surface.")
-		recs = append(recs, "Enable a default Seccomp filter profile (e.g. Docker default profile or custom seccomp.json) to restrict unused system calls.")
-		scoreReduction += 20
-	case 1:
-		// Strict (very rare for containers, basically only read, write, exit, sigreturn)
-	case 2:
-		// Seccomp-BPF enabled (Standard Docker/Containerd default)
-	}
-
-	// 4. NoNewPrivs Audit
+	// 3. NoNewPrivs Audit
 	noNewPrivs := false
 	noNewPrivsVal, hasNoNewPrivs := kv["NoNewPrivs"]
 	if hasNoNewPrivs {
@@ -144,6 +129,21 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 		risks = append(risks, "NoNewPrivs flag is not set. Subprocesses can gain new privileges via SUID binaries or file capabilities.")
 		recs = append(recs, "Set 'NoNewPrivileges=true' in systemd or '--security-opt=no-new-privileges' in Docker to prevent privilege escalation.")
 		scoreReduction += 15
+	}
+
+	// 4. Seccomp Deep Audit
+	seccompDetails := AuditSeccomp(pid, kv, noNewPrivs)
+	seccompMode := 0
+	if seccompDetails != nil {
+		seccompMode = seccompDetails.Mode
+		if seccompMode == 0 {
+			scoreReduction += 20
+		}
+		if seccompDetails.PolicyArchitecture == "Default-Allow (Blacklist)" {
+			scoreReduction += 15
+		}
+		risks = append(risks, seccompDetails.Risks...)
+		recs = append(recs, seccompDetails.Recommendations...)
 	}
 
 	// 5. LSM (Linux Security Module) Profile
@@ -247,22 +247,32 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 		finalScore = 0
 	}
 
+	seccompFiltersCount := 0
+	hasListener := false
+	if seccompDetails != nil {
+		seccompFiltersCount = seccompDetails.FilterCount
+		hasListener = seccompDetails.HasUserNotifier
+	}
+
 	return &SecurityAuditResult{
-		UID:               uid,
-		EUID:              euid,
-		GID:               gid,
-		EGID:              egid,
-		SeccompMode:       seccompMode,
-		NoNewPrivs:        noNewPrivs,
-		LSMProfile:        lsmProfile,
-		UserNSMapped:      isRootless,
-		SetgroupsStatus:   setgroupsStatus,
-		InitProcessName:   initProcName,
-		CgroupMemoryLimit: memLimit,
-		CgroupPidsLimit:   pidsLimit,
-		Risks:             risks,
-		Recommendations:   recs,
-		Score:             finalScore,
+		UID:                uid,
+		EUID:               euid,
+		GID:                gid,
+		EGID:               egid,
+		SeccompMode:        seccompMode,
+		SeccompFilters:     seccompFiltersCount,
+		HasSeccompListener: hasListener,
+		SeccompDetails:     seccompDetails,
+		NoNewPrivs:         noNewPrivs,
+		LSMProfile:         lsmProfile,
+		UserNSMapped:       isRootless,
+		SetgroupsStatus:    setgroupsStatus,
+		InitProcessName:    initProcName,
+		CgroupMemoryLimit:  memLimit,
+		CgroupPidsLimit:    pidsLimit,
+		Risks:              risks,
+		Recommendations:    recs,
+		Score:              finalScore,
 	}, nil
 }
 
