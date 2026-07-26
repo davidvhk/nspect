@@ -2424,8 +2424,32 @@ const DashboardHTML = `<!DOCTYPE html>
                 document.getElementById('sec-lsm').textContent = sec.lsm_profile || 'Unconfined / Disabled';
                 
                 let seccompText = 'Disabled (Seccomp not active)';
-                if (sec.seccomp_mode === 2) seccompText = 'Enabled (Filter mode - syscall restrictions active)';
-                else if (sec.seccomp_mode === 1) seccompText = 'Enabled (Strict mode - read/write/exit/rt_sigreturn only)';
+                if (sec.seccomp_mode === 2) {
+                    seccompText = 'Enabled (Filter mode - syscall restrictions active)';
+                    if (sec.seccomp_details) {
+                        const sd = sec.seccomp_details;
+                        if (sd.policy_architecture) {
+                            seccompText += ' [' + sd.policy_architecture + ']';
+                        }
+                        if (sd.instruction_count) {
+                            seccompText += ' (' + sd.instruction_count + ' BPF insns)';
+                        }
+                        if (sd.default_return_action) {
+                            seccompText += ' [Default: ' + sd.default_return_action + ']';
+                        }
+                        if (sd.has_arg_inspection) {
+                            seccompText += ' [Arg Filtering Active]';
+                        }
+                    }
+                    if (sec.seccomp_filters > 1) {
+                        seccompText += ' (' + sec.seccomp_filters + ' stacked filters)';
+                    }
+                    if (sec.has_seccomp_listener) {
+                        seccompText += ' [User Notifier Active]';
+                    }
+                } else if (sec.seccomp_mode === 1) {
+                    seccompText = 'Enabled (Strict mode - read/write/exit/rt_sigreturn only)';
+                }
                 document.getElementById('sec-seccomp').textContent = seccompText;
                 
                 document.getElementById('sec-nnp').textContent = sec.no_new_privs ? 'Enabled (NoNewPrivs active - prevents SUID privilege escalations)' : 'Disabled (Process can gain new privileges via SUID)';

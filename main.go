@@ -34,6 +34,7 @@ func printUsage() {
 	fmt.Printf("      --fail-on-fd-leaks    Fail if any high-risk leaked host file descriptors are found\n")
 	fmt.Printf("      --fail-on-fs-risks    Fail if any Critical, High, or Medium filesystem risks are found\n")
 	fmt.Printf("      --fail-on-root        Fail if container is running as root on host (EUID=0 and not virtualized)\n")
+	fmt.Printf("      --fail-on-seccomp-disabled Fail if Seccomp filter is disabled or Default-Allow\n")
 }
 
 func main() {
@@ -56,6 +57,7 @@ func main() {
 	var failOnFDLeaksFlag bool
 	var failOnRootFlag bool
 	var failOnFSRisksFlag bool
+	var failOnSeccompDisabledFlag bool
 
 	flag.StringVar(&pidFlag, "pid", "", "Audit the specified process ID")
 	flag.StringVar(&pidFlag, "p", "", "Audit the specified process ID")
@@ -83,6 +85,7 @@ func main() {
 	flag.BoolVar(&failOnFDLeaksFlag, "fail-on-fd-leaks", false, "Fail if any high-risk leaked host file descriptors are found")
 	flag.BoolVar(&failOnFSRisksFlag, "fail-on-fs-risks", false, "Fail if any Critical, High, or Medium filesystem risks are found")
 	flag.BoolVar(&failOnRootFlag, "fail-on-root", false, "Fail if container is running as root on host (EUID=0 and not virtualized)")
+	flag.BoolVar(&failOnSeccompDisabledFlag, "fail-on-seccomp-disabled", false, "Fail if Seccomp filter is disabled or Default-Allow")
 
 	flag.Parse()
 
@@ -234,6 +237,14 @@ func main() {
 		}
 	}
 
+	if failOnSeccompDisabledFlag && report.Security != nil {
+		if report.Security.SeccompMode == 0 {
+			failedAssertions = append(failedAssertions, "Seccomp filter is disabled")
+		} else if report.Security.SeccompDetails != nil && report.Security.SeccompDetails.PolicyArchitecture == "Default-Allow (Blacklist)" {
+			failedAssertions = append(failedAssertions, "Seccomp filter uses permissive Default-Allow (Blacklist) policy")
+		}
+	}
+
 	if len(failedAssertions) > 0 {
 		fmt.Fprintf(os.Stderr, "\n%s%s=== CI/CD AUDIT FAILED ===%s\n", auditor.Bold, auditor.Red, auditor.Reset)
 		for _, assertion := range failedAssertions {
@@ -244,7 +255,7 @@ func main() {
 	}
 
 	// If any CI/CD flags were passed and all checks succeeded
-	if failScoreFlag > 0 || failOnSharedNSFlag || failOnCapsFlag || failOnMountRisksFlag || failOnSecretsFlag || failOnFDLeaksFlag || failOnFSRisksFlag || failOnRootFlag {
+	if failScoreFlag > 0 || failOnSharedNSFlag || failOnCapsFlag || failOnMountRisksFlag || failOnSecretsFlag || failOnFDLeaksFlag || failOnFSRisksFlag || failOnRootFlag || failOnSeccompDisabledFlag {
 		fmt.Printf("\n%s%s=== CI/CD AUDIT SUCCESSFUL ===%s\n", auditor.Bold, auditor.Green, auditor.Reset)
 		fmt.Printf("  [✓] All configured security assertions passed.\n\n")
 	}

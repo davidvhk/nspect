@@ -3,6 +3,7 @@ package auditor
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -160,11 +161,92 @@ func (r *AuditReport) RenderCLI() string {
 	if r.Security.SeccompMode == 2 {
 		seccompDesc = "Enabled (Filter)"
 		seccompColor = Green
+		if r.Security.SeccompDetails != nil && r.Security.SeccompDetails.PolicyArchitecture != "" {
+			seccompDesc = fmt.Sprintf("Enabled (Filter - %s)", r.Security.SeccompDetails.PolicyArchitecture)
+		}
 	} else if r.Security.SeccompMode == 1 {
 		seccompDesc = "Enabled (Strict)"
 		seccompColor = Green
 	}
 	sb.WriteString(fmt.Sprintf("  - Seccomp      : %s%s%s\n", seccompColor, seccompDesc, Reset))
+	if r.Security.SeccompMode == 2 {
+		filterCountStr := "1 active filter"
+		if r.Security.SeccompFilters > 1 {
+			filterCountStr = fmt.Sprintf("%d stacked filters", r.Security.SeccompFilters)
+		}
+		sb.WriteString(fmt.Sprintf("  - Seccomp Filters: %s\n", filterCountStr))
+	}
+	if r.Security.SeccompDetails != nil {
+		sd := r.Security.SeccompDetails
+		if sd.ProfileFingerprint != "" {
+			sb.WriteString(fmt.Sprintf("  - Seccomp Profile: %s%s%s\n", Cyan, sd.ProfileFingerprint, Reset))
+		}
+		if sd.InstructionCount > 0 {
+			sb.WriteString(fmt.Sprintf("  - BPF Filter Len : %d instructions\n", sd.InstructionCount))
+		}
+		if sd.DefaultReturnAction != "" {
+			defaultColor := Red
+			if strings.Contains(sd.DefaultReturnAction, "KILL") || strings.Contains(sd.DefaultReturnAction, "ERRNO") || strings.Contains(sd.DefaultReturnAction, "TRAP") {
+				defaultColor = Green
+			}
+			sb.WriteString(fmt.Sprintf("  - Default Action : %s%s%s\n", defaultColor, sd.DefaultReturnAction, Reset))
+		}
+		if len(sd.ActionCounts) > 0 {
+			var actionStrs []string
+			for act, cnt := range sd.ActionCounts {
+				actionStrs = append(actionStrs, fmt.Sprintf("%s: %d", act, cnt))
+			}
+			sort.Strings(actionStrs)
+			sb.WriteString(fmt.Sprintf("  - BPF Actions    : %s\n", strings.Join(actionStrs, ", ")))
+		}
+		if sd.HasArgInspection {
+			sb.WriteString(fmt.Sprintf("  - Arg Filtering  : %sActive (%d argument checks)%s\n", Green, sd.ArgInspectionCount, Reset))
+		}
+		if len(sd.MetadataFlags) > 0 {
+			sb.WriteString(fmt.Sprintf("  - Seccomp Flags  : %s\n", strings.Join(sd.MetadataFlags, ", ")))
+		}
+		if sd.InspectedViaPtrace {
+			archStatus := fmt.Sprintf("%sValidated (AUDIT_ARCH check present)%s", Green, Reset)
+			if sd.ValidatedArchName != "" {
+				archStatus = fmt.Sprintf("%sValidated (%s)%s", Green, sd.ValidatedArchName, Reset)
+			}
+			if !sd.ArchValidated {
+				archStatus = fmt.Sprintf("%sUnvalidated (32-bit / ABI bypass risk)%s", Red, Reset)
+			}
+			sb.WriteString(fmt.Sprintf("  - Multi-Arch Check: %s\n", archStatus))
+		}
+		if sd.ViolationsDetected > 0 {
+			sb.WriteString(fmt.Sprintf("  - Seccomp Violations: %s%d event(s) logged%s\n", Red, sd.ViolationsDetected, Reset))
+		}
+	}
+	if r.Security.HasSeccompListener && r.Security.SeccompDetails != nil {
+		sb.WriteString(fmt.Sprintf("  - Seccomp Notifier: Active (FD %d)\n", r.Security.SeccompDetails.NotifierFD))
+	}
+	if r.Security.SeccompDetails != nil && r.Security.SeccompDetails.InspectionNotes != "" && !r.Security.SeccompDetails.InspectedViaPtrace {
+		sb.WriteString(fmt.Sprintf("  - BPF Filter Audit: %s%s%s\n", Yellow, r.Security.SeccompDetails.InspectionNotes, Reset))
+		noteLower := strings.ToLower(r.Security.SeccompDetails.InspectionNotes)
+		if strings.Contains(noteLower, "permission denied") || strings.Contains(noteLower, "operation not permitted") || strings.Contains(noteLower, "eperm") || strings.Contains(noteLower, "ptrace") {
+			if strings.Contains(r.Security.SeccompDetails.InspectionNotes, "Unprivileged LXC/Container") {
+				sb.WriteString(fmt.Sprintf("    %sTip: Running in LXC/container. Execute 'sudo sysctl kernel.yama.ptrace_scope=0' on the HOST machine (e.g. Proxmox VE host), or run nspect on the host targeting PID %d.%s\n", Gray, r.PID, Reset))
+			} else {
+				sb.WriteString(fmt.Sprintf("    %sTip: Run 'sudo ./nspect --pid %d' (for CAP_SYS_PTRACE), or run 'sudo sysctl kernel.yama.ptrace_scope=0' on the host system.%s\n", Gray, r.PID, Reset))
+			}
+		}
+	}
+	if r.Security.SeccompDetails != nil && len(r.Security.SeccompDetails.AuditedSyscalls) > 0 {
+		sb.WriteString(fmt.Sprintf("    %sAudited High-Risk Syscalls:%s\n", Gray, Reset))
+		for _, sc := range r.Security.SeccompDetails.AuditedSyscalls {
+			scColor := Green
+			if sc.Status == "Allowed" {
+				scColor = Yellow
+			}
+			actStr := sc.ActionDetails
+			if actStr == "" {
+				actStr = sc.Status
+			}
+			sb.WriteString(fmt.Sprintf("      - %-18s (nr %3d): %s%-22s%s [%s] | %s\n", sc.Name, sc.Syscall, scColor, sc.Status, Reset, actStr, sc.Risk))
+		}
+	}
 
 	nnpStatus := fmt.Sprintf("%sNo%s", Red, Reset)
 	if r.Security.NoNewPrivs {
