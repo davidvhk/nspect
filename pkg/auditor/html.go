@@ -1039,6 +1039,70 @@ const htmlTemplate = `<!DOCTYPE html>
                         {{end}}
                     </div>
                 </details>
+
+                <!-- 9. Systemd Service File Audit -->
+                {{if .Systemd}}
+                <details open>
+                    <summary>
+                        <div class="summary-left">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                            <span>[9] Systemd Service File Audit</span>
+                        </div>
+                        <div class="summary-right">
+                            <span class="badge score {{scoreClass .Systemd.Score}}">Score: {{.Systemd.Score}}/100</span>
+                            <svg class="caret" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5H7z"/></svg>
+                        </div>
+                    </summary>
+                    <div class="section-content">
+                        <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap;">
+                            <div>Unit Name: <strong style="font-family: monospace; color: var(--accent);">{{.Systemd.UnitName}}</strong></div>
+                            {{if .Systemd.FilePath}}
+                            <div>File Path: <span style="font-family: monospace; color: var(--text-muted);">{{.Systemd.FilePath}}</span></div>
+                            {{end}}
+                        </div>
+
+                        {{if .Systemd.FileContent}}
+                        <details style="margin-bottom: 1rem; background: var(--bg-card); border-radius: 6px; padding: 0.5rem;">
+                            <summary style="font-weight: 600; cursor: pointer; font-size: 0.85rem; color: var(--accent);">View Raw Systemd Service File ({{.Systemd.UnitName}})</summary>
+                            <pre style="background: #0d1117; color: #c9d1d9; padding: 0.75rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; margin-top: 0.5rem; max-height: 250px;">{{.Systemd.FileContent}}</pre>
+                        </details>
+                        {{end}}
+
+                        <div style="font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Hardening Directives Checklist:</div>
+                        <table style="width: 100%; font-size: 0.8rem; border-collapse: collapse; margin-bottom: 1rem;">
+                            <thead>
+                                <tr style="text-align: left; border-bottom: 1px solid var(--border-color);">
+                                    <th style="padding: 6px;">Directive</th>
+                                    <th style="padding: 6px;">Current Status</th>
+                                    <th style="padding: 6px;">Description</th>
+                                    <th style="padding: 6px;">Recommended Value</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {{range .Systemd.Directives}}
+                                <tr style="border-bottom: 1px solid var(--border-color);">
+                                    <td style="padding: 6px; font-family: monospace;"><strong>{{.Name}}</strong></td>
+                                    <td style="padding: 6px;">
+                                        {{if .IsSecure}}
+                                        <span class="badge risk-low">✓ {{.CurrentValue}}</span>
+                                        {{else}}
+                                        <span class="badge risk-high">✗ {{if .CurrentValue}}{{.CurrentValue}}{{else}}Missing{{end}}</span>
+                                        {{end}}
+                                    </td>
+                                    <td style="padding: 6px; color: var(--text-secondary);">{{.Description}}</td>
+                                    <td style="padding: 6px; font-family: monospace; color: var(--accent);">{{.RecommendedValue}}</td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+
+                        {{if .Systemd.SuggestedUnitSnippet}}
+                        <div style="font-weight: 600; font-size: 0.85rem; color: var(--accent); margin-bottom: 0.4rem;">Suggested Hardened [Service] Override Snippet:</div>
+                        <pre style="background: #0d1117; color: #58a6ff; padding: 0.75rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto;">{{.Systemd.SuggestedUnitSnippet}}</pre>
+                        {{end}}
+                    </div>
+                </details>
+                {{end}}
             </div>
         </div>
     </div>

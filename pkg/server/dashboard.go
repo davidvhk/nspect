@@ -1753,6 +1753,47 @@ const DashboardHTML = `<!DOCTYPE html>
                             </table>
                         </div>
                     </div>
+
+                    <!-- Systemd Service Unit Audit Card -->
+                    <div class="section-card" id="sec-systemd-card" style="display: none; margin-top: 1.5rem;">
+                        <div class="section-card-title">
+                            <div class="section-card-title-text">
+                                <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                                Systemd Service File & Hardening Audit
+                            </div>
+                            <span class="risk-badge info" id="sec-systemd-score-badge">SCORE: 100/100</span>
+                        </div>
+                        <div style="margin-bottom: 1rem; font-size: 0.9rem; color: var(--text-secondary);">
+                            Service Unit: <strong id="sec-systemd-unit" style="font-family: monospace; color: var(--accent);"></strong> &bull;
+                            Path: <span id="sec-systemd-path" style="font-family: monospace;"></span>
+                        </div>
+
+                        <!-- Dropdowns / Collapsible Raw Service File -->
+                        <details style="margin-bottom: 1rem; background: var(--bg-card); border-radius: 6px; padding: 0.5rem;" id="sec-systemd-raw-container">
+                            <summary style="font-weight: 600; cursor: pointer; font-size: 0.85rem; color: var(--accent);">View Raw Systemd Service File Content</summary>
+                            <pre style="background: #0d1117; color: #c9d1d9; padding: 0.75rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; margin-top: 0.5rem; max-height: 250px;" id="sec-systemd-raw-code"></pre>
+                        </details>
+
+                        <div style="font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Hardening Directives Audit:</div>
+                        <div class="data-table-wrapper" style="margin-bottom: 1.5rem;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Directive</th>
+                                        <th>Status</th>
+                                        <th>Description</th>
+                                        <th>Recommended Directive</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sec-systemd-directives">
+                                    <!-- Populated dynamically -->
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div style="font-weight: 600; font-size: 0.85rem; color: var(--accent); margin-bottom: 0.4rem;">Suggested Hardened [Service] Override Snippet:</div>
+                        <pre style="background: #0d1117; color: #58a6ff; padding: 0.75rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto;" id="sec-systemd-snippet"></pre>
+                    </div>
                 </div>
 
                 <!-- Tab: Network -->
@@ -2458,6 +2499,47 @@ const DashboardHTML = `<!DOCTYPE html>
                 document.getElementById('sec-cgroup-mem').textContent = sec.cgroup_memory_limit || 'Unknown / Unlimited';
                 document.getElementById('sec-cgroup-pids').textContent = sec.cgroup_pids_limit || 'Unknown / Unlimited';
                 document.getElementById('sec-init-name').textContent = sec.init_process_name || 'unknown';
+            }
+
+            // Systemd Service Unit Audit
+            const sysdCard = document.getElementById('sec-systemd-card');
+            if (report.systemd) {
+                sysdCard.style.display = 'block';
+                const sysd = report.systemd;
+                document.getElementById('sec-systemd-unit').textContent = sysd.unit_name || 'Service Unit';
+                document.getElementById('sec-systemd-path').textContent = sysd.file_path || 'Not found';
+                document.getElementById('sec-systemd-score-badge').textContent = 'SCORE: ' + sysd.score + '/100';
+                
+                const rawCodeEl = document.getElementById('sec-systemd-raw-code');
+                if (sysd.file_content) {
+                    rawCodeEl.textContent = sysd.file_content;
+                    document.getElementById('sec-systemd-raw-container').style.display = 'block';
+                } else {
+                    document.getElementById('sec-systemd-raw-container').style.display = 'none';
+                }
+
+                const directivesBody = document.getElementById('sec-systemd-directives');
+                directivesBody.innerHTML = '';
+                if (sysd.directives && sysd.directives.length > 0) {
+                    sysd.directives.forEach(d => {
+                        const tr = document.createElement('tr');
+                        const statusBadge = d.is_secure 
+                            ? '<span class="risk-badge low">✓ ' + escapeHTML(d.current_value || 'Configured') + '</span>'
+                            : '<span class="risk-badge danger">✗ ' + escapeHTML(d.current_value || 'Missing') + '</span>';
+                        tr.innerHTML = '<td style="font-family:var(--font-mono);font-weight:600">' + escapeHTML(d.name) + '</td><td>' + statusBadge + '</td><td style="color:var(--text-secondary);font-size:0.85rem">' + escapeHTML(d.description) + '</td><td style="font-family:var(--font-mono);color:var(--accent)">' + escapeHTML(d.recommended_value) + '</td>';
+                        directivesBody.appendChild(tr);
+                    });
+                }
+
+                const snippetEl = document.getElementById('sec-systemd-snippet');
+                if (sysd.suggested_unit_snippet) {
+                    snippetEl.textContent = sysd.suggested_unit_snippet;
+                    snippetEl.style.display = 'block';
+                } else {
+                    snippetEl.style.display = 'none';
+                }
+            } else {
+                sysdCard.style.display = 'none';
             }
 
             // 8. Sockets & Network Tab

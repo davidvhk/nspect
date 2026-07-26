@@ -20,6 +20,7 @@ type AuditReport struct {
 	Network      *NetAuditResult       `json:"network"`
 	FD           *FDAuditResult        `json:"file_descriptors"`
 	Filesystem   *FilesystemAuditResult `json:"filesystem"`
+	Systemd      *SystemdAuditResult   `json:"systemd,omitempty"`
 	OverallScore int                   `json:"overall_score"`
 }
 
@@ -65,9 +66,16 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		fsResult = &FilesystemAuditResult{Risks: nil, Score: 100}
 	}
 
+	sysdResult, err := AuditSystemd(pid, name)
+	if err != nil {
+		sysdResult = nil
+	}
+
 	// Calculate overall score (weighted average)
-	// Weights: Namespaces (20%), Capabilities (20%), Mounts (15%), Security Context (15%), Env (10%), Filesystem (10%), FD (10%)
 	overall := (nsResult.Score*20 + capResult.Score*20 + mountResult.Score*15 + secResult.Score*15 + envResult.Score*10 + fsResult.Score*10 + fdResult.Score*10) / 100
+	if sysdResult != nil {
+		overall = (nsResult.Score*18 + capResult.Score*18 + mountResult.Score*14 + secResult.Score*14 + envResult.Score*10 + fsResult.Score*10 + fdResult.Score*8 + sysdResult.Score*8) / 100
+	}
 
 	return &AuditReport{
 		PID:          pid,
@@ -81,6 +89,7 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		Network:      netResult,
 		FD:           fdResult,
 		Filesystem:   fsResult,
+		Systemd:      sysdResult,
 		OverallScore: overall,
 	}, nil
 }
@@ -436,6 +445,40 @@ func (r *AuditReport) RenderCLI() string {
 	}
 	sb.WriteString("\n")
 
+	// 9. Systemd Service Audit
+	if r.Systemd != nil {
+		sb.WriteString(fmt.Sprintf("%s[9] SYSTEMD SERVICE FILE AUDIT%s (Score: %d/100)\n", Bold+Underline, Reset, r.Systemd.Score))
+		sb.WriteString(fmt.Sprintf("  - Service Unit : %s%s%s\n", Bold, r.Systemd.UnitName, Reset))
+		if r.Systemd.FilePath != "" {
+			sb.WriteString(fmt.Sprintf("  - File Path    : %s\n", r.Systemd.FilePath))
+		}
+		if len(r.Systemd.DropinFiles) > 0 {
+			sb.WriteString(fmt.Sprintf("  - Drop-in Files: %s\n", strings.Join(r.Systemd.DropinFiles, ", ")))
+		}
+		sb.WriteString("  - Hardening Directives Audit:\n")
+		for _, d := range r.Systemd.Directives {
+			if d.IsSecure {
+				sb.WriteString(fmt.Sprintf("    %s[✓]%s %-24s : %s%s%s\n", Green, Reset, d.Name, Green, d.CurrentValue, Reset))
+			} else {
+				curVal := d.CurrentValue
+				if curVal == "" {
+					curVal = "missing"
+				}
+				sb.WriteString(fmt.Sprintf("    %s[✗]%s %-24s : %s%-12s%s | Rec: %s\n", Red, Reset, d.Name, Red, curVal, Reset, d.RecommendedValue))
+			}
+		}
+		if r.Systemd.SuggestedUnitSnippet != "" {
+			sb.WriteString(fmt.Sprintf("  %sSuggested Hardened [Service] Override Snippet:%s\n", Gray, Reset))
+			lines := strings.Split(r.Systemd.SuggestedUnitSnippet, "\n")
+			for _, line := range lines {
+				if line != "" {
+					sb.WriteString(fmt.Sprintf("    %s%s%s\n", Cyan, line, Reset))
+				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+
 	// Summary Recommendation
 	recs := append([]string{}, r.Security.Recommendations...)
 	if r.Mounts != nil {
@@ -443,6 +486,9 @@ func (r *AuditReport) RenderCLI() string {
 	}
 	if r.Filesystem != nil {
 		recs = append(recs, r.Filesystem.Recommendations...)
+	}
+	if r.Systemd != nil {
+		recs = append(recs, r.Systemd.Recommendations...)
 	}
 	if len(r.Env.Secrets) > 0 {
 		recs = append(recs, "Do not expose passwords, API keys, or security tokens in environment variables. Use secret stores (e.g. Docker Secrets, K8s Secrets, HashiCorp Vault) or mount credentials securely as files.")
