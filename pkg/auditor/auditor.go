@@ -9,10 +9,11 @@ import (
 
 // IsolatedProcess represents a process running in a mount namespace separate from the host init.
 type IsolatedProcess struct {
-	PID         int    `json:"pid"`
-	Name        string `json:"name"`
-	Cmdline     string `json:"cmdline"`
-	MountInode  uint64 `json:"mount_inode"`
+	PID        int    `json:"pid"`
+	Name       string `json:"name"`
+	Cmdline    string `json:"cmdline"`
+	MountInode uint64 `json:"mount_inode"`
+	Score      int    `json:"score"`
 }
 
 // FindIsolatedProcesses scans /proc to find all processes running in isolated mount namespaces.
@@ -52,11 +53,16 @@ func FindIsolatedProcesses() ([]IsolatedProcess, error) {
 		if targetMntNS != hostMntNS {
 			name, _ := util.GetProcessName(pid)
 			cmdline, _ := util.GetCmdline(pid)
+			score := 100
+			if report, err := GenerateReport(pid, name, cmdline, true); err == nil {
+				score = report.OverallScore
+			}
 			processes = append(processes, IsolatedProcess{
 				PID:        pid,
 				Name:       name,
 				Cmdline:    cmdline,
 				MountInode: targetMntNS,
+				Score:      score,
 			})
 		}
 	}

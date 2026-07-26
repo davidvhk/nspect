@@ -1103,6 +1103,28 @@ const htmlTemplate = `<!DOCTYPE html>
                     </div>
                 </details>
                 {{end}}
+
+                <!-- 10. Process Hierarchy & Container Tree -->
+                {{if .ProcessTree}}
+                <details open>
+                    <summary>
+                        <div class="summary-left">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6M12 18v4M4.93 10.93l4.24 4.24M14.83 8.83l4.24-4.24M14.83 15.17l4.24 4.24M4.93 13.07l4.24-4.24"/></svg>
+                            <span>[10] Process Hierarchy & Container Tree</span>
+                        </div>
+                        <div class="summary-right">
+                            <span class="badge info">Nodes: {{.ProcessTree.TotalNodes}}</span>
+                            <svg class="caret" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5H7z"/></svg>
+                        </div>
+                    </summary>
+                    <div class="section-content">
+                        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+                            Hierarchy graph for target process <strong>PID {{.ProcessTree.TargetPID}}</strong>
+                        </div>
+                        <pre style="background: #0d1117; color: #38bdf8; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.85rem; line-height: 1.5; overflow-x: auto;">{{.ProcessTree.TreeASCII}}</pre>
+                    </div>
+                </details>
+                {{end}}
             </div>
         </div>
     </div>

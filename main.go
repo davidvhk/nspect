@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ func printUsage() {
 	fmt.Printf("  -p, --pid <PID>         Audit the specified process ID\n")
 	fmt.Printf("  -l, --list              List all running processes in isolated namespaces (containers/sandboxes)\n")
 	fmt.Printf("  -m, --mask              Mask sensitive environment variables instead of showing them in plaintext\n")
+	fmt.Printf("  -t, --tree              Display container process hierarchy & parent/child tree\n")
 	fmt.Printf("  -j, --json              Output report in JSON format\n")
 	fmt.Printf("  -H, --html              Output report in HTML format\n")
 	fmt.Printf("  -s, --server            Start lightweight web console for live auditing\n")
@@ -41,6 +43,7 @@ func main() {
 	var pidFlag string
 	var listFlag bool
 	var maskFlag bool
+	var treeFlag bool
 	var jsonFlag bool
 	var htmlFlag bool
 	var helpFlag bool
@@ -65,6 +68,8 @@ func main() {
 	flag.BoolVar(&listFlag, "l", false, "List all running isolated processes")
 	flag.BoolVar(&maskFlag, "mask", false, "Mask sensitive environment variables")
 	flag.BoolVar(&maskFlag, "m", false, "Mask sensitive environment variables")
+	flag.BoolVar(&treeFlag, "tree", false, "Display process hierarchy tree")
+	flag.BoolVar(&treeFlag, "t", false, "Display process hierarchy tree")
 	flag.BoolVar(&jsonFlag, "json", false, "Output report in JSON format")
 	flag.BoolVar(&jsonFlag, "j", false, "Output report in JSON format")
 	flag.BoolVar(&htmlFlag, "html", false, "Output report in HTML format")
@@ -106,6 +111,32 @@ func main() {
 	// 1. Handle Listing
 	if listFlag {
 		listIsolated()
+		os.Exit(0)
+	}
+
+	// 2. Handle Global Process Tree (nspect --tree without PID)
+	if treeFlag && pidFlag == "" {
+		treeResult, err := auditor.AuditProcessTree(1)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error building process tree: %v\n", err)
+			os.Exit(1)
+		}
+		if jsonFlag {
+			data, _ := json.MarshalIndent(treeResult, "", "  ")
+			fmt.Println(string(data))
+			os.Exit(0)
+		}
+		fmt.Printf("\n%s%s=== GLOBAL HOST & CONTAINER PROCESS HIERARCHY TREE ===%s\n", auditor.Bold, auditor.Cyan, auditor.Reset)
+		fmt.Printf("Total Monitored Nodes: %d\n\n", treeResult.TotalNodes)
+		lines := strings.Split(strings.TrimSpace(treeResult.TreeASCII), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "[Container Init/Shim]") {
+				fmt.Printf("  %s%s%s\n", auditor.Yellow, line, auditor.Reset)
+			} else {
+				fmt.Printf("  %s\n", line)
+			}
+		}
+		fmt.Println()
 		os.Exit(0)
 	}
 

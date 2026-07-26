@@ -40,12 +40,14 @@ Unlike static config parsers or traditional local privilege escalation scripts (
 - **Namespace Auditing:** Compares process namespaces (`ipc`, `uts`, `mnt`, `net`, `pid`, `user`, `cgroup`, `time`) with baseline contexts to identify boundary leaks and shared mount propagation paths.
 - **Capability Analysis:** Decodes hex capability bitmasks (`CapEff`, `CapPrm`, `CapBnd`) against a security risk matrix. Automatically adjusts risk weightings for rootless/non-root environments.
 - **Mount Exposure Scan:** Parses mount points to detect writable kernel interfaces (`/sys`, `/proc`), runtime control sockets (Docker, containerd, podman), mount propagation states (`shared`), and missing filesystem hardening flags (`nosuid`, `nodev`, `noexec`).
-- **Security Context Audit:** Audits user namespace mapping ranges (single-user vs wide translate boundaries), group ID setting policies (`setgroups`), deep Seccomp BPF filter profiles (disassembling filters via `ptrace` to audit policy architecture, stacked filter depth, user notification listeners, and restriction of high-risk syscalls like `unshare`, `bpf`, `ptrace`, `kexec_load`), LSM profile states (AppArmor/SELinux), PID 1 init process safety (mitigating zombie leakage), cgroup resource limit enforcement (memory/PIDs constraints), and `NoNewPrivileges` co-enforcement.
+- **Security Context Audit:** Audits user namespace mapping ranges (single-user vs wide translate boundaries), group ID setting policies (`setgroups`), deep Seccomp BPF filter profiles (disassembling filters via `ptrace` to audit policy architecture, instruction count, default return actions, argument inspection checks, multi-arch validation, stacked filter depth, user notification listeners, and restriction of 18 high-risk syscalls like `unshare`, `bpf`, `ptrace`, `mount`, `pivot_root`, `io_uring_setup`), LSM profile states (AppArmor/SELinux), PID 1 init process safety (mitigating zombie leakage), cgroup resource limit enforcement (memory/PIDs constraints), and `NoNewPrivileges` co-enforcement.
+- **Systemd Service Unit Audit:** Automatically discovers systemd `.service` files and drop-in overrides (`/etc/systemd/system/*.d/override.conf`), evaluating 12 key security directives (`NoNewPrivileges`, `ProtectSystem`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `RestrictRealtime`, `RestrictNamespaces`, `SystemCallFilter`, `MemoryMax`) and generating ready-to-use hardened `[Service]` override snippets.
+- **Process Hierarchy & Container Trees:** Builds a full process hierarchy tree (`-t`, `--tree`). When run as `sudo ./nspect --tree` without a PID, it maps all container runtimes (`containerd`, `dockerd`), shims, init systems, and containerized processes across the entire host system.
 - **Filesystem Integrity & SUID Auditing:** Scans the target container's internal filesystem via `/proc/[pid]/root/` to detect SUID/SGID binaries (like `sudo`/`su`), world-writable system files (`/etc/passwd`, `/etc/shadow`), and packaged credentials/secrets (like `.env` files) from the host perspective.
 - **Advanced Escape & Side-Channel Checks:** Audits user namespace GID mapping ranges for host administrative groups (like `docker`, `sudo`, `wheel`), detects write access to critical kernel helper endpoints (`core_pattern`, `uevent_helper`), and alerts on host-level CPU SMT (Hyper-Threading) side-channel exposure (Spectre, MDS).
 - **Environment Secret Scanner:** Decodes `/proc/[pid]/environ` to scan for key patterns pointing to credentials, tokens, or passwords (`*PASS*`, `*SECRET*`, `*KEY*`, `*TOKEN*`), displaying them masked to avoid output leakage.
 - **Inner-Namespace Socket Analyzer:** Directly parses `/proc/[pid]/net/tcp` and `/proc/[pid]/net/tcp6` inside target network namespaces, exposing active listening ports and connections without needing namespace-entering tools.
-- **FD Leak Detector:** Catalogue `/proc/[pid]/fd/` descriptors and alerts on inherited host directories (abuseable via `openat`), raw storage blocks, or critical configuration files.
+- **FD Leak Detector:** Catalogues `/proc/[pid]/fd/` descriptors and alerts on inherited host directories (abusable via `openat`), raw storage blocks, or critical configuration files.
 - **Process Auto-Detection:** Automatically lists all isolated sandboxes and containers currently running on the host without depending on external Docker/containerd APIs.
 - **Zero-Dependency Portability:** Compiled into a single, statically-linked binary, making it extremely easy to copy and run on target hosts during security assessments.
 
@@ -100,7 +102,20 @@ For example, to audit your current shell context:
 ./nspect --pid $$
 ```
 
-### 3. Mask Sensitive Environment Variables
+### 3. Display Process Hierarchy & Container Trees
+Visualize parent/child relationships and container boundary trees:
+
+```bash
+# View global process hierarchy for all containers on the host:
+sudo ./nspect --tree
+# Or using shorthand:
+sudo ./nspect -t
+
+# Audit a specific target PID with process hierarchy details:
+./nspect --pid <PID> --tree
+```
+
+### 4. Mask Sensitive Environment Variables
 By default, `nspect` displays the values of environment variables identified as sensitive (e.g. passwords, paths, keys) in plaintext. You can optionally mask them with:
 
 ```bash
@@ -109,15 +124,15 @@ By default, `nspect` displays the values of environment variables identified as 
 ./nspect --pid <PID> -m
 ```
 
-### 4. Generate JSON Reports
+### 5. Generate JSON Reports
 For programmatic consumption, compliance auditing, or integration with security pipelines:
 
 ```bash
 ./nspect --pid <PID> --json
 ```
 
-### 5. Generate Standalone HTML Reports
-To generate a beautifully formatted, single-file static HTML report (featuring a modern dark-mode theme, collapsible accordion panels, color-coded badges, and a live client-side search filter for volume mounts):
+### 6. Generate Standalone HTML Reports
+To generate a beautifully formatted, single-file static HTML report (featuring a modern dark-mode theme, collapsible accordion panels, color-coded badges, systemd service file auditing, and a live process tree):
 
 ```bash
 ./nspect --pid <PID> --html > report.html
@@ -127,7 +142,7 @@ To generate a beautifully formatted, single-file static HTML report (featuring a
 
 This output is completely self-contained (all styling and interaction logic is embedded inline), making it perfectly suited for sending over email, uploading as build artifacts, or reading offline in air-gapped environments.
 
-### 6. Interactive Web Console & Live Dashboard
+### 7. Interactive Web Console & Live Dashboard
 
 You can start a lightweight web server that serves an interactive web console. The console scans host processes on the fly, monitors container health, and displays breakout walkthroughs for critical risks:
 

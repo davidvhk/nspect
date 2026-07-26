@@ -30,6 +30,7 @@ func Start(host string, port int) error {
 	mux.HandleFunc("/", handleHome)
 	mux.HandleFunc("/api/containers", handleListContainers)
 	mux.HandleFunc("/api/audit/", handleAudit)
+	mux.HandleFunc("/api/tree", handleTree)
 
 	fmt.Printf("%s[+] Starting nspect web console on http://%s:%d%s\n", auditor.Bold+auditor.Green, host, port, auditor.Reset)
 	fmt.Printf("[+] Auditing server ready. Scan isolated containers or input target PIDs.\n")
@@ -159,4 +160,14 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 // Fallback for self audit or server details
 func GetServerPID() int {
 	return os.Getpid()
+}
+
+// handleTree returns global host process hierarchy tree
+func handleTree(w http.ResponseWriter, _ *http.Request) {
+	treeResult, err := auditor.AuditProcessTree(1)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed building process tree: %v", err)})
+		return
+	}
+	writeJSON(w, http.StatusOK, treeResult)
 }

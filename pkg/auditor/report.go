@@ -21,6 +21,7 @@ type AuditReport struct {
 	FD           *FDAuditResult        `json:"file_descriptors"`
 	Filesystem   *FilesystemAuditResult `json:"filesystem"`
 	Systemd      *SystemdAuditResult   `json:"systemd,omitempty"`
+	ProcessTree  *ProcessTreeAuditResult `json:"process_tree,omitempty"`
 	OverallScore int                   `json:"overall_score"`
 }
 
@@ -71,6 +72,11 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		sysdResult = nil
 	}
 
+	treeResult, err := AuditProcessTree(pid)
+	if err != nil {
+		treeResult = nil
+	}
+
 	// Calculate overall score (weighted average)
 	overall := (nsResult.Score*20 + capResult.Score*20 + mountResult.Score*15 + secResult.Score*15 + envResult.Score*10 + fsResult.Score*10 + fdResult.Score*10) / 100
 	if sysdResult != nil {
@@ -90,6 +96,7 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		FD:           fdResult,
 		Filesystem:   fsResult,
 		Systemd:      sysdResult,
+		ProcessTree:  treeResult,
 		OverallScore: overall,
 	}, nil
 }
@@ -474,6 +481,22 @@ func (r *AuditReport) RenderCLI() string {
 				if line != "" {
 					sb.WriteString(fmt.Sprintf("    %s%s%s\n", Cyan, line, Reset))
 				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// 10. Process Hierarchy & Container Tree
+	if r.ProcessTree != nil && r.ProcessTree.TreeASCII != "" {
+		sb.WriteString(fmt.Sprintf("%s[10] PROCESS HIERARCHY & CONTAINER TREE%s (Nodes: %d)\n", Bold+Underline, Reset, r.ProcessTree.TotalNodes))
+		lines := strings.Split(strings.TrimSpace(r.ProcessTree.TreeASCII), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "[TARGET PROCESS]") {
+				sb.WriteString(fmt.Sprintf("  %s%s%s\n", Bold+Cyan, line, Reset))
+			} else if strings.Contains(line, "[Container Init/Shim]") {
+				sb.WriteString(fmt.Sprintf("  %s%s%s\n", Yellow, line, Reset))
+			} else {
+				sb.WriteString(fmt.Sprintf("  %s\n", line))
 			}
 		}
 		sb.WriteString("\n")

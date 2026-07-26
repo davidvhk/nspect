@@ -1348,8 +1348,25 @@ const DashboardHTML = `<!DOCTYPE html>
             </form>
         </div>
 
+        <div style="padding: 0 1rem; margin-bottom: 0.75rem;">
+            <button class="btn-export primary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.6rem;" onclick="loadGlobalTree()">
+                <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: currentColor;"><path d="M22 11V3h-7v3H9V3H2v8h7V8h2v10h4v3h7v-8h-7v3h-2V8h2v3h7zM4 5h3v4H4V5zm13 0h3v4h-3V5zm0 11h3v4h-3v-4z"/></svg>
+                Host Process Tree
+            </button>
+        </div>
+
         <div class="process-list-container">
-            <h3 class="list-title">Isolated Processes</h3>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+                <h3 class="list-title" style="margin-bottom: 0;">Isolated Processes</h3>
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <select id="sort-select" onchange="renderProcessList()" style="width: 100%; background: var(--bg-card); color: var(--text-muted); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.35rem 0.5rem; font-size: 0.75rem; font-family: var(--font-body);">
+                    <option value="score-asc" selected>Lowest Security Score (Worst First)</option>
+                    <option value="score-desc">Highest Security Score (Best First)</option>
+                    <option value="pid-asc">PID (Ascending)</option>
+                    <option value="name-asc">Process Name (A - Z)</option>
+                </select>
+            </div>
             <ul class="process-list" id="process-list">
                 <!-- Populated dynamically -->
             </ul>
@@ -1435,6 +1452,10 @@ const DashboardHTML = `<!DOCTYPE html>
                     </div>
                 </div>
                 <div class="report-actions">
+                    <button class="btn-export" onclick="loadGlobalTree()">
+                        <svg viewBox="0 0 24 24"><path d="M22 11V3h-7v3H9V3H2v8h7V8h2v10h4v3h7v-8h-7v3h-2V8h2v3h7zM4 5h3v4H4V5zm13 0h3v4h-3V5zm0 11h3v4h-3v-4z"/></svg>
+                        Host Process Tree
+                    </button>
                     <button class="btn-export" id="export-json-btn">
                         <svg viewBox="0 0 24 24"><path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/></svg>
                         Export JSON
@@ -1512,7 +1533,7 @@ const DashboardHTML = `<!DOCTYPE html>
                         <!-- Grid Summary Cards -->
                         <div class="summary-dashboard">
                             
-                            <div class="metric-widget">
+                            <div class="metric-widget" onclick="switchTab('tab-namespaces')" title="Click to view Namespaces audit">
                                 <div class="metric-label-row">
                                     <span class="metric-label">Namespaces</span>
                                     <div class="metric-icon">
@@ -1525,7 +1546,7 @@ const DashboardHTML = `<!DOCTYPE html>
                                 </div>
                             </div>
 
-                            <div class="metric-widget">
+                            <div class="metric-widget" onclick="switchTab('tab-capabilities')" title="Click to view Capabilities audit">
                                 <div class="metric-label-row">
                                     <span class="metric-label">Capabilities</span>
                                     <div class="metric-icon">
@@ -1538,7 +1559,7 @@ const DashboardHTML = `<!DOCTYPE html>
                                 </div>
                             </div>
 
-                            <div class="metric-widget">
+                            <div class="metric-widget" onclick="switchTab('tab-security')" title="Click to view Security & LSM audit">
                                 <div class="metric-label-row">
                                     <span class="metric-label">User Context</span>
                                     <div class="metric-icon">
@@ -1551,7 +1572,7 @@ const DashboardHTML = `<!DOCTYPE html>
                                 </div>
                             </div>
 
-                            <div class="metric-widget">
+                            <div class="metric-widget" onclick="switchTab('tab-mounts')" title="Click to view Mounts & Volume Exposures audit">
                                 <div class="metric-label-row">
                                     <span class="metric-label">Exposures</span>
                                     <div class="metric-icon">
@@ -1929,6 +1950,43 @@ const DashboardHTML = `<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- Standalone Global Host Process Tree Screen -->
+        <div class="report-wrapper" id="tree-wrapper" style="display: none;">
+            <div class="report-header">
+                <div class="report-meta-info">
+                    <div class="report-pid-row">
+                        <h2 class="report-target-title">Global Host & Container Process Hierarchy Tree</h2>
+                        <span class="report-pid-badge" id="tree-nodes-count">0 Monitored Nodes</span>
+                    </div>
+                    <div class="report-cmdline-wrapper">
+                        <span class="report-cmdline-label">SCOPE:</span>
+                        <div class="report-cmdline">Host-wide Linux process namespace & container shim tree</div>
+                    </div>
+                </div>
+                <div class="report-actions">
+                    <button class="btn-export primary" onclick="loadGlobalTree()">
+                        <svg viewBox="0 0 24 24"><path d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"/></svg>
+                        Refresh Tree
+                    </button>
+                </div>
+            </div>
+            <div class="report-scroll-content">
+                <div class="section-card">
+                    <div class="section-card-title">
+                        <div class="section-card-title-text">
+                            <svg viewBox="0 0 24 24"><path d="M22 11V3h-7v3H9V3H2v8h7V8h2v10h4v3h7v-8h-7v3h-2V8h2v3h7zM4 5h3v4H4V5zm13 0h3v4h-3V5zm0 11h3v4h-3v-4z"/></svg>
+                            Process & Container Tree Hierarchy
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 1rem; font-size: 0.85rem; color: var(--text-secondary);">
+                        Host-wide hierarchy graph mapping init daemons, container shims, and sandboxed processes.<br>
+                        Yellow = Container Init / Shim &bull; White = Process Nodes
+                    </div>
+                    <pre style="background: #0d1117; color: #38bdf8; padding: 1.25rem; border-radius: 8px; font-family: var(--font-mono); font-size: 0.9rem; line-height: 1.6; overflow-x: auto; border: 1px solid var(--border-color);" id="global-tree-view"></pre>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     </div>
@@ -2143,6 +2201,56 @@ const DashboardHTML = `<!DOCTYPE html>
             document.getElementById('export-pdf-btn').addEventListener('click', exportPDF);
         });
 
+        function switchTab(tabId) {
+            const tabButtons = document.querySelectorAll('.tab-btn');
+            tabButtons.forEach(b => {
+                if (b.getAttribute('data-tab') === tabId) {
+                    b.classList.add('active');
+                } else {
+                    b.classList.remove('active');
+                }
+            });
+            const contents = document.querySelectorAll('.tab-content');
+            contents.forEach(c => {
+                if (c.id === tabId) {
+                    c.classList.add('active');
+                } else {
+                    c.classList.remove('active');
+                }
+            });
+        }
+
+        async function loadGlobalTree() {
+            document.querySelectorAll('.process-item').forEach(el => el.classList.remove('active'));
+
+            document.getElementById('welcome-screen').style.display = 'none';
+            document.getElementById('report-wrapper').style.display = 'none';
+            document.getElementById('error-screen').style.display = 'none';
+            document.getElementById('tree-wrapper').style.display = 'none';
+            document.getElementById('loading-screen').style.display = 'flex';
+
+            try {
+                const response = await fetch('/api/tree');
+                if (!response.ok) {
+                    throw new Error('Failed to fetch host process tree');
+                }
+                const treeData = await response.json();
+
+                document.getElementById('loading-screen').style.display = 'none';
+
+                document.getElementById('tree-nodes-count').textContent = (treeData.total_nodes || 0) + ' Monitored Nodes';
+                document.getElementById('global-tree-view').textContent = treeData.tree_ascii || 'No tree output generated.';
+
+                document.getElementById('tree-wrapper').style.display = 'flex';
+            } catch (err) {
+                document.getElementById('loading-screen').style.display = 'none';
+                document.getElementById('error-message').textContent = err.message;
+                document.getElementById('error-screen').style.display = 'flex';
+            }
+        }
+
+        let rawContainersList = [];
+
         // Fetch processes list
         async function loadContainers() {
             const listEl = document.getElementById('process-list');
@@ -2152,44 +2260,70 @@ const DashboardHTML = `<!DOCTYPE html>
                 const response = await fetch('/api/containers');
                 if (!response.ok) throw new Error('API failed');
                 
-                const containers = await response.json();
-                
-                if (containers.length === 0) {
-                    listEl.innerHTML = '<li class="empty-list-msg"><svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 1,1 20,12A8,8 0 0,1 12,20M12,2A10,10 0 1,0 22,12A10,10 0 0,0 12,2Z"/></svg><span>No isolated containers found on this host.</span><span style="font-size: 0.75rem; max-width: 200px;">Enter a PID manually at the top to audit host processes.</span></li>';
-                    return;
-                }
-                
-                listEl.innerHTML = '';
-                containers.forEach(proc => {
-                    const item = document.createElement('li');
-                    item.className = 'process-item';
-                    item.dataset.pid = proc.pid;
-                    item.onclick = () => {
-                        // Highlight active in list
-                        document.querySelectorAll('.process-item').forEach(el => el.classList.remove('active'));
-                        item.classList.add('active');
-                        runAudit(proc.pid);
-                    };
-                    
-                    item.innerHTML = '<div class="process-item-header"><span class="process-name">' + escapeHTML(proc.name) + '</span><span class="process-pid">PID ' + proc.pid + '</span></div><div class="process-cmdline">' + escapeHTML(proc.cmdline || '[No arguments]') + '</div><div class="process-ns"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.53c-.26-.81-1-1.4-1.9-1.4h-1v-3c0-.55-.45-1-1-1h-6v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.4z"/></svg> MNT Inode: ' + proc.mount_inode + '</div>';
-                    listEl.appendChild(item);
-                });
-                
+                rawContainersList = await response.json();
+                renderProcessList();
             } catch (err) {
                 listEl.innerHTML = '<li class="empty-list-msg" style="color:var(--color-danger)">Failed to load running processes. Ensure daemon privileges.</li>';
             }
         }
 
+        function renderProcessList() {
+            const listEl = document.getElementById('process-list');
+            const sortMode = document.getElementById('sort-select') ? document.getElementById('sort-select').value : 'score-asc';
+
+            let containers = [...rawContainersList];
+
+            if (sortMode === 'score-asc') {
+                containers.sort((a, b) => (a.score !== undefined ? a.score : 100) - (b.score !== undefined ? b.score : 100));
+            } else if (sortMode === 'score-desc') {
+                containers.sort((a, b) => (b.score !== undefined ? b.score : 100) - (a.score !== undefined ? a.score : 100));
+            } else if (sortMode === 'pid-asc') {
+                containers.sort((a, b) => a.pid - b.pid);
+            } else if (sortMode === 'name-asc') {
+                containers.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            }
+
+            if (containers.length === 0) {
+                listEl.innerHTML = '<li class="empty-list-msg"><svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 1,1 20,12A8,8 0 0,1 12,20M12,2A10,10 0 1,0 22,12A10,10 0 0,0 12,2Z"/></svg><span>No isolated containers found on this host.</span><span style="font-size: 0.75rem; max-width: 200px;">Enter a PID manually at the top to audit host processes.</span></li>';
+                return;
+            }
+
+            listEl.innerHTML = '';
+            containers.forEach(proc => {
+                const item = document.createElement('li');
+                item.className = 'process-item';
+                item.dataset.pid = proc.pid;
+                item.onclick = () => {
+                    document.querySelectorAll('.process-item').forEach(el => el.classList.remove('active'));
+                    item.classList.add('active');
+                    runAudit(proc.pid);
+                };
+
+                const score = proc.score !== undefined ? proc.score : 100;
+                let scoreBadgeClass = 'high';
+                if (score < 50) {
+                    scoreBadgeClass = 'low';
+                } else if (score < 80) {
+                    scoreBadgeClass = 'medium';
+                }
+
+                item.innerHTML = '<div class="process-item-header"><span class="process-name">' + escapeHTML(proc.name) + '</span><span class="process-pid">PID ' + proc.pid + '</span></div><div class="process-cmdline">' + escapeHTML(proc.cmdline || '[No arguments]') + '</div><div class="process-ns"><span class="score-status ' + scoreBadgeClass + '" style="font-size: 0.65rem; padding: 0.1rem 0.4rem;">Score: ' + score + '/100</span><span style="margin-left: auto;">Inode: ' + proc.mount_inode + '</span></div>';
+                listEl.appendChild(item);
+            });
+        }
+
         // Run Audit on specific PID
         async function runAudit(pid) {
-            // Show loading panel
+            // Automatically switch to Overview tab when selecting a process
+            switchTab('tab-overview');
+
             document.getElementById('welcome-screen').style.display = 'none';
+            document.getElementById('tree-wrapper').style.display = 'none';
             document.getElementById('report-wrapper').style.display = 'none';
             document.getElementById('error-screen').style.display = 'none';
             document.getElementById('loading-screen').style.display = 'flex';
             
             try {
-                // Perform AJAX audit call
                 const response = await fetch('/api/audit/' + pid);
                 if (!response.ok) {
                     const errObj = await response.json();
@@ -2199,13 +2333,10 @@ const DashboardHTML = `<!DOCTYPE html>
                 const data = await response.json();
                 currentReportData = data;
                 
-                // Populate Dashboard fields
                 populateReport(data);
                 
-                // Switch Panels
                 document.getElementById('loading-screen').style.display = 'none';
                 document.getElementById('report-wrapper').style.display = 'flex';
-                
             } catch (err) {
                 document.getElementById('loading-screen').style.display = 'none';
                 document.getElementById('error-message').textContent = err.message;
@@ -2216,7 +2347,9 @@ const DashboardHTML = `<!DOCTYPE html>
         // Render data inside HTML dashboard fields
         function populateReport(report) {
             // 1. Title Meta
-            document.getElementById('report-target-name').textContent = report.process_name;
+            if (document.getElementById('report-target-name')) {
+                document.getElementById('report-target-name').textContent = report.process_name || 'Process Audit';
+            }
             document.getElementById('report-target-pid').textContent = 'PID ' + report.pid;
             document.getElementById('report-target-cmdline').textContent = report.cmdline || '[No arguments / Kernel Thread]';
             
