@@ -1348,10 +1348,14 @@ const DashboardHTML = `<!DOCTYPE html>
             </form>
         </div>
 
-        <div style="padding: 0 1rem; margin-bottom: 0.75rem;">
-            <button class="btn-export primary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.6rem;" onclick="loadGlobalTree()">
-                <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: currentColor;"><path d="M22 11V3h-7v3H9V3H2v8h7V8h2v10h4v3h7v-8h-7v3h-2V8h2v3h7zM4 5h3v4H4V5zm13 0h3v4h-3V5zm0 11h3v4h-3v-4z"/></svg>
+        <div style="padding: 0 1rem; margin-bottom: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem;">
+            <button class="btn-export primary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.5rem;" onclick="loadGlobalTree()">
+                <svg viewBox="0 0 24 24" style="width: 15px; height: 15px; fill: currentColor;"><path d="M22 11V3h-7v3H9V3H2v8h7V8h2v10h4v3h7v-8h-7v3h-2V8h2v3h7zM4 5h3v4H4V5zm13 0h3v4h-3V5zm0 11h3v4h-3v-4z"/></svg>
                 Host Process Tree
+            </button>
+            <button class="btn-export" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.5rem; background-color: rgba(59, 130, 246, 0.1); border-color: rgba(59, 130, 246, 0.3); color: #60a5fa;" onclick="loadHostKernel()">
+                <svg viewBox="0 0 24 24" style="width: 15px; height: 15px; fill: currentColor;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                Host Kernel Hardening
             </button>
         </div>
 
@@ -1987,8 +1991,56 @@ const DashboardHTML = `<!DOCTYPE html>
             </div>
         </div>
 
-    </div>
-
+        <!-- Standalone Host Kernel Hardening Screen -->
+        <div class="report-wrapper" id="kernel-wrapper" style="display: none;">
+            <div class="report-header">
+                <div class="report-meta-info">
+                    <div class="report-pid-row">
+                        <h2 class="report-target-title">Global Host Kernel Attack Surface & Sysctl Audit</h2>
+                        <span class="report-pid-badge" id="host-kernel-score-badge">SCORE: 100/100</span>
+                    </div>
+                    <div class="report-cmdline-wrapper">
+                        <span class="report-cmdline-label">SCOPE:</span>
+                        <div class="report-cmdline">Host Linux kernel security sysctls (eBPF, JIT, KASLR leaks, YAMA ptrace)</div>
+                    </div>
+                </div>
+                <div class="report-actions">
+                    <button class="btn-export primary" onclick="loadHostKernel()">
+                        <svg viewBox="0 0 24 24"><path d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"/></svg>
+                        Refresh Sysctls
+                    </button>
+                </div>
+            </div>
+            <div class="report-scroll-content">
+                <div class="section-card">
+                    <div class="section-card-title">
+                        <div class="section-card-title-text">
+                            <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                            Host Sysctl Hardening Matrix
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 1rem; font-size: 0.85rem; color: var(--text-secondary);">
+                        Host kernel sysctl parameters controlling kernel attack surface exposure.<br>
+                        These parameters apply globally to all containers running on this host kernel.
+                    </div>
+                    <div class="data-table-wrapper">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Sysctl Knob</th>
+                                    <th style="width: 110px;">Current Value</th>
+                                    <th style="width: 110px;">Status</th>
+                                    <th>Description & Remediation Command</th>
+                                </tr>
+                            </thead>
+                            <tbody id="host-kernel-sysctls-body">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- MODAL FOR ESCAPE POCS -->
@@ -2199,6 +2251,9 @@ const DashboardHTML = `<!DOCTYPE html>
             });
 
             document.getElementById('export-pdf-btn').addEventListener('click', exportPDF);
+            
+            // Auto-load process cards on startup
+            loadContainers();
         });
 
         function switchTab(tabId) {
@@ -2225,6 +2280,7 @@ const DashboardHTML = `<!DOCTYPE html>
 
             document.getElementById('welcome-screen').style.display = 'none';
             document.getElementById('report-wrapper').style.display = 'none';
+            document.getElementById('kernel-wrapper').style.display = 'none';
             document.getElementById('error-screen').style.display = 'none';
             document.getElementById('tree-wrapper').style.display = 'none';
             document.getElementById('loading-screen').style.display = 'flex';
@@ -2242,6 +2298,52 @@ const DashboardHTML = `<!DOCTYPE html>
                 document.getElementById('global-tree-view').textContent = treeData.tree_ascii || 'No tree output generated.';
 
                 document.getElementById('tree-wrapper').style.display = 'flex';
+            } catch (err) {
+                document.getElementById('loading-screen').style.display = 'none';
+                document.getElementById('error-message').textContent = err.message;
+                document.getElementById('error-screen').style.display = 'flex';
+            }
+        }
+
+        async function loadHostKernel() {
+            document.querySelectorAll('.process-item').forEach(el => el.classList.remove('active'));
+
+            document.getElementById('welcome-screen').style.display = 'none';
+            document.getElementById('report-wrapper').style.display = 'none';
+            document.getElementById('error-screen').style.display = 'none';
+            document.getElementById('tree-wrapper').style.display = 'none';
+            document.getElementById('kernel-wrapper').style.display = 'none';
+            document.getElementById('loading-screen').style.display = 'flex';
+
+            try {
+                const response = await fetch('/api/kernel');
+                if (!response.ok) {
+                    throw new Error('Failed to fetch host kernel sysctls');
+                }
+                const kernelData = await response.json();
+
+                document.getElementById('loading-screen').style.display = 'none';
+
+                if (kernelData && kernelData.sysctls) {
+                    document.getElementById('host-kernel-score-badge').textContent = 'SCORE: ' + (kernelData.score || 100) + '/100';
+                    const kernelBody = document.getElementById('host-kernel-sysctls-body');
+                    kernelBody.innerHTML = '';
+                    kernelData.sysctls.forEach(sys => {
+                        const tr = document.createElement('tr');
+                        const statusBadge = sys.is_secure 
+                            ? '<span class="risk-badge low">✓ Secure</span>'
+                            : '<span class="risk-badge ' + sys.risk_level.toLowerCase() + '">✗ ' + escapeHTML(sys.risk_level) + '</span>';
+                        
+                        let descHtml = escapeHTML(sys.description);
+                        if (sys.remediation) {
+                            descHtml += '<div style="font-family:var(--font-mono);color:var(--accent);margin-top:2px;">Rec: ' + escapeHTML(sys.remediation) + '</div>';
+                        }
+                        tr.innerHTML = '<td style="font-family:var(--font-mono);font-weight:600">' + escapeHTML(sys.key) + '</td><td style="font-family:var(--font-mono);color:var(--accent)">' + escapeHTML(sys.current_value) + '</td><td>' + statusBadge + '</td><td style="color:var(--text-secondary);font-size:0.85rem">' + descHtml + '</td>';
+                        kernelBody.appendChild(tr);
+                    });
+                }
+
+                document.getElementById('kernel-wrapper').style.display = 'flex';
             } catch (err) {
                 document.getElementById('loading-screen').style.display = 'none';
                 document.getElementById('error-message').textContent = err.message;
@@ -2319,6 +2421,7 @@ const DashboardHTML = `<!DOCTYPE html>
 
             document.getElementById('welcome-screen').style.display = 'none';
             document.getElementById('tree-wrapper').style.display = 'none';
+            document.getElementById('kernel-wrapper').style.display = 'none';
             document.getElementById('report-wrapper').style.display = 'none';
             document.getElementById('error-screen').style.display = 'none';
             document.getElementById('loading-screen').style.display = 'flex';
@@ -2431,6 +2534,7 @@ const DashboardHTML = `<!DOCTYPE html>
             if (report.mounts && report.mounts.risks) totalRisks += report.mounts.risks.length;
             if (report.filesystem && report.filesystem.risks) totalRisks += report.filesystem.risks.length;
             if (report.security && report.security.risks) totalRisks += report.security.risks.length;
+            if (report.kernel && report.kernel.risks) totalRisks += report.kernel.risks.length;
             
             document.getElementById('metric-risks-count').textContent = totalRisks;
             const risksStatusEl = document.getElementById('metric-risks-status');
@@ -2445,6 +2549,25 @@ const DashboardHTML = `<!DOCTYPE html>
                 risksStatusEl.textContent = 'Critical';
             }
 
+            // Kernel Hardening Metric
+            if (document.getElementById('metric-kernel-score')) {
+                const kScore = report.kernel ? report.kernel.score : 100;
+                document.getElementById('metric-kernel-score').textContent = kScore;
+                const kStatusEl = document.getElementById('metric-kernel-status');
+                if (kStatusEl) {
+                    if (kScore >= 80) {
+                        kStatusEl.className = 'metric-status success';
+                        kStatusEl.textContent = 'Hardened';
+                    } else if (kScore >= 50) {
+                        kStatusEl.className = 'metric-status warning';
+                        kStatusEl.textContent = 'Moderate';
+                    } else {
+                        kStatusEl.className = 'metric-status danger';
+                        kStatusEl.textContent = 'Exposed';
+                    }
+                }
+            }
+            
             // 3. Remediation Actions
             const recsListEl = document.getElementById('overview-recs-list');
             recsListEl.innerHTML = '';
@@ -2673,6 +2796,36 @@ const DashboardHTML = `<!DOCTYPE html>
                 }
             } else {
                 sysdCard.style.display = 'none';
+            }
+
+            // Kernel Attack Surface Audit
+            const kernelCard = document.getElementById('sec-kernel-card');
+            if (kernelCard) {
+                if (report.kernel && report.kernel.sysctls) {
+                    kernelCard.style.display = 'block';
+                    if (document.getElementById('sec-kernel-score-badge')) {
+                        document.getElementById('sec-kernel-score-badge').textContent = 'SCORE: ' + report.kernel.score + '/100';
+                    }
+                    const kernelBody = document.getElementById('sec-kernel-sysctls');
+                    if (kernelBody) {
+                        kernelBody.innerHTML = '';
+                        report.kernel.sysctls.forEach(sys => {
+                            const tr = document.createElement('tr');
+                            const statusBadge = sys.is_secure 
+                                ? '<span class="risk-badge low">✓ Secure</span>'
+                                : '<span class="risk-badge ' + sys.risk_level.toLowerCase() + '">✗ ' + escapeHTML(sys.risk_level) + '</span>';
+                            
+                            let descHtml = escapeHTML(sys.description);
+                            if (sys.remediation) {
+                                descHtml += '<div style="font-family:var(--font-mono);color:var(--accent);margin-top:2px;">Rec: ' + escapeHTML(sys.remediation) + '</div>';
+                            }
+                            tr.innerHTML = '<td style="font-family:var(--font-mono);font-weight:600">' + escapeHTML(sys.key) + '</td><td style="font-family:var(--font-mono);color:var(--accent)">' + escapeHTML(sys.current_value) + '</td><td>' + statusBadge + '</td><td style="color:var(--text-secondary);font-size:0.85rem">' + descHtml + '</td>';
+                            kernelBody.appendChild(tr);
+                        });
+                    }
+                } else {
+                    kernelCard.style.display = 'none';
+                }
             }
 
             // 8. Sockets & Network Tab

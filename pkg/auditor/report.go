@@ -22,6 +22,7 @@ type AuditReport struct {
 	Filesystem   *FilesystemAuditResult `json:"filesystem"`
 	Systemd      *SystemdAuditResult   `json:"systemd,omitempty"`
 	ProcessTree  *ProcessTreeAuditResult `json:"process_tree,omitempty"`
+	Kernel       *KernelAuditResult    `json:"kernel,omitempty"`
 	OverallScore int                   `json:"overall_score"`
 }
 
