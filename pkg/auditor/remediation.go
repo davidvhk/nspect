@@ -170,7 +170,7 @@ func ApplySystemdOverride(artifacts *RemediationArtifacts) (string, error) {
 		return "", fmt.Errorf("failed creating directory %s: %w", dir, err)
 	}
 
-	if err := os.WriteFile(artifacts.SystemdOverridePath, []byte(artifacts.SystemdOverride), 0644); err != nil {
+	if err := os.WriteFile(artifacts.SystemdOverridePath, []byte(artifacts.SystemdOverride), 0600); err != nil {
 		return "", fmt.Errorf("failed writing override file %s: %w", artifacts.SystemdOverridePath, err)
 	}
 

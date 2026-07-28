@@ -278,7 +278,7 @@ func AuditSystemd(pid int, procName string) (*SystemdAuditResult, error) {
 			snippetBuilder.WriteString(def.RecommendedValue + "\n")
 		}
 
-		displayVal := val
+		var displayVal string
 		if !isFound {
 			displayVal = "MISSING"
 		} else if isSecure {
