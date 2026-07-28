@@ -66,6 +66,12 @@ func AuditProcessTree(targetPID int) (*ProcessTreeAuditResult, error) {
 		curr = parent
 	}
 
+	// Set of ancestor PIDs leading up to target
+	ancestorSet := make(map[int]bool)
+	for _, a := range ancestors {
+		ancestorSet[a.PID] = true
+	}
+
 	// Recursively attach children
 	var attachChildren func(node *ProcessNode)
 	totalNodes := 0
@@ -77,8 +83,15 @@ func AuditProcessTree(targetPID int) (*ProcessTreeAuditResult, error) {
 				if childNode.PID == targetPID {
 					childNode.IsTarget = true
 				}
-				node.Children = append(node.Children, childNode)
-				attachChildren(childNode)
+
+				// If targetPID is 1 (global tree request), include all processes.
+				// If targetPID is a specific process, include only:
+				// 1) Children that are in the ancestor chain toward targetPID
+				// 2) All descendants of targetPID itself
+				if targetPID == 1 || node.PID == targetPID || !ancestorSet[node.PID] || ancestorSet[cPID] {
+					node.Children = append(node.Children, childNode)
+					attachChildren(childNode)
+				}
 			}
 		}
 	}

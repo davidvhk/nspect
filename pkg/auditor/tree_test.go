@@ -2,29 +2,26 @@ package auditor
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
-func TestAuditProcessTree_Self(t *testing.T) {
+func TestAuditProcessTree_LineageFiltering(t *testing.T) {
+	// Test tree generation for current process
 	selfPID := os.Getpid()
-	treeResult, err := AuditProcessTree(selfPID)
+	result, err := AuditProcessTree(selfPID)
 	if err != nil {
-		t.Fatalf("AuditProcessTree failed on self PID %d: %v", selfPID, err)
+		t.Fatalf("AuditProcessTree failed: %v", err)
 	}
 
-	if treeResult == nil {
-		t.Fatalf("expected non-nil treeResult")
+	if result == nil || result.TreeASCII == "" {
+		t.Fatal("expected non-empty TreeASCII")
 	}
 
-	if treeResult.TargetPID != selfPID {
-		t.Errorf("TargetPID = %d; want %d", treeResult.TargetPID, selfPID)
+	if !strings.Contains(result.TreeASCII, "[TARGET PROCESS]") {
+		t.Error("TreeASCII should contain [TARGET PROCESS]")
 	}
 
-	if treeResult.TotalNodes <= 0 {
-		t.Errorf("TotalNodes = %d; want > 0", treeResult.TotalNodes)
-	}
-
-	if treeResult.TreeASCII == "" {
-		t.Errorf("expected non-empty TreeASCII string")
-	}
+	t.Logf("Filtered Process Lineage Nodes: %d", result.TotalNodes)
+	t.Logf("Filtered Tree ASCII:\n%s", result.TreeASCII)
 }

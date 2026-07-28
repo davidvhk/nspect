@@ -42,6 +42,7 @@ Unlike static config parsers or traditional local privilege escalation scripts (
 - **Mount Exposure Scan:** Parses mount points to detect writable kernel interfaces (`/sys`, `/proc`), runtime control sockets (Docker, containerd, podman), mount propagation states (`shared`), and missing filesystem hardening flags (`nosuid`, `nodev`, `noexec`).
 - **Security Context Audit:** Audits user namespace mapping ranges (single-user vs wide translate boundaries), group ID setting policies (`setgroups`), deep Seccomp BPF filter profiles (disassembling filters via `ptrace` to audit policy architecture, instruction count, default return actions, argument inspection checks, multi-arch validation, stacked filter depth, user notification listeners, and restriction of 18 high-risk syscalls like `unshare`, `bpf`, `ptrace`, `mount`, `pivot_root`, `io_uring_setup`), LSM profile states (AppArmor/SELinux), PID 1 init process safety (mitigating zombie leakage), cgroup resource limit enforcement (memory/PIDs constraints), and `NoNewPrivileges` co-enforcement.
 - **Systemd Service Unit Audit:** Automatically discovers systemd `.service` files and drop-in overrides (`/etc/systemd/system/*.d/override.conf`), evaluating 12 key security directives (`NoNewPrivileges`, `ProtectSystem`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `RestrictRealtime`, `RestrictNamespaces`, `SystemCallFilter`, `MemoryMax`) and generating ready-to-use hardened `[Service]` override snippets.
+- **Kernel Attack Surface & Sysctl Audit:** Evaluates 10 critical host kernel hardening sysctl knobs (`unprivileged_bpf_disabled`, `bpf_jit_harden`, `kptr_restrict`, `dmesg_restrict`, `yama.ptrace_scope`, `unprivileged_userns_clone`, `max_user_namespaces`, `protected_symlinks`, `protected_hardlinks`, `protected_fifos`), auditing KASLR address leaks, eBPF exploitation, and ptrace attachment risks.
 - **Process Hierarchy & Container Trees:** Builds a full process hierarchy tree (`-t`, `--tree`). When run as `sudo ./nspect --tree` without a PID, it maps all container runtimes (`containerd`, `dockerd`), shims, init systems, and containerized processes across the entire host system.
 - **Filesystem Integrity & SUID Auditing:** Scans the target container's internal filesystem via `/proc/[pid]/root/` to detect SUID/SGID binaries (like `sudo`/`su`), world-writable system files (`/etc/passwd`, `/etc/shadow`), and packaged credentials/secrets (like `.env` files) from the host perspective.
 - **Advanced Escape & Side-Channel Checks:** Audits user namespace GID mapping ranges for host administrative groups (like `docker`, `sudo`, `wheel`), detects write access to critical kernel helper endpoints (`core_pattern`, `uevent_helper`), and alerts on host-level CPU SMT (Hyper-Threading) side-channel exposure (Spectre, MDS).
@@ -273,6 +274,17 @@ Security Score: 65/100
     * [tcp6] ::1:631
   - Established Connections:
     * [tcp] 192.168.1.80:22 -> 192.168.1.51:42984
+
+[11] KERNEL ATTACK SURFACE & SYSCTL AUDIT (Score: 75/100)
+  [✓] kernel.unprivileged_bpf_disabled     : 2        | Unprivileged eBPF program loading is disabled.
+  [✗] kernel.kptr_restrict                 : 0        | Rec: 1 or 2 (Kernel symbol addresses (%pK) are exposed in /proc/kallsyms.)
+  [✓] kernel.dmesg_restrict                : 1        | Access to kernel ring buffer (dmesg) is restricted.
+  [✓] kernel.yama.ptrace_scope             : 1        | YAMA ptrace restrictions are enforced.
+  [✗] kernel.unprivileged_userns_clone     : 1        | Rec: 0 (Unprivileged users can clone new user namespaces.)
+  [✓] user.max_user_namespaces             : 2147483647 | Max user namespaces set to 2147483647.
+  [✓] fs.protected_symlinks                : 1        | Symlink follow protections in sticky /tmp are enabled.
+  [✓] fs.protected_hardlinks               : 1        | Hardlink creation protections across owners are enabled.
+  [✓] fs.protected_fifos                   : 1        | FIFO pipe protections in sticky /tmp are enabled.
 
 RECOMMENDED REMEDIATIONS
   1. Set 'NoNewPrivileges=true' in systemd or '--security-opt=no-new-privileges' in Docker to prevent privilege escalation.

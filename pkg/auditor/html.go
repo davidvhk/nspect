@@ -1125,6 +1125,58 @@ const htmlTemplate = `<!DOCTYPE html>
                     </div>
                 </details>
                 {{end}}
+
+                <!-- 11. Kernel Attack Surface & Sysctl Audit -->
+                {{if .Kernel}}
+                <details open>
+                    <summary>
+                        <div class="summary-left">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                            <span>[11] Kernel Attack Surface & Sysctl Audit</span>
+                        </div>
+                        <div class="summary-right">
+                            <span class="badge score {{scoreClass .Kernel.Score}}">Score: {{.Kernel.Score}}/100</span>
+                            <svg class="caret" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5H7z"/></svg>
+                        </div>
+                    </summary>
+                    <div class="section-content">
+                        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+                            Host kernel sysctl hardening knobs (eBPF, JIT, KASLR address leaks, YAMA ptrace, symlink protections).
+                        </div>
+                        <table style="width: 100%; font-size: 0.8rem; border-collapse: collapse; margin-bottom: 1rem;">
+                            <thead>
+                                <tr style="text-align: left; border-bottom: 1px solid var(--border-color);">
+                                    <th style="padding: 6px;">Sysctl Knob</th>
+                                    <th style="padding: 6px;">Current Value</th>
+                                    <th style="padding: 6px;">Status</th>
+                                    <th style="padding: 6px;">Description / Remediation</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {{range .Kernel.Sysctls}}
+                                <tr style="border-bottom: 1px solid var(--border-color);">
+                                    <td style="padding: 6px; font-family: monospace;"><strong>{{.Key}}</strong></td>
+                                    <td style="padding: 6px; font-family: monospace; color: var(--accent);">{{.CurrentValue}}</td>
+                                    <td style="padding: 6px;">
+                                        {{if .IsSecure}}
+                                        <span class="badge risk-low">✓ Secure</span>
+                                        {{else}}
+                                        <span class="badge {{riskClass .RiskLevel}}">✗ {{.RiskLevel}}</span>
+                                        {{end}}
+                                    </td>
+                                    <td style="padding: 6px; color: var(--text-secondary);">
+                                        {{.Description}}
+                                        {{if .Remediation}}
+                                        <div style="font-family: monospace; color: var(--accent); margin-top: 2px;">Rec: {{.Remediation}}</div>
+                                        {{end}}
+                                    </td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+                {{end}}
             </div>
         </div>
     </div>

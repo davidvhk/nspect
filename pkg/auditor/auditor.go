@@ -3,6 +3,7 @@ package auditor
 import (
 	"os"
 	"strconv"
+	"sync"
 
 	"nspect/pkg/util"
 )
@@ -16,23 +17,22 @@ type IsolatedProcess struct {
 	Score      int    `json:"score"`
 }
 
-// FindIsolatedProcesses scans /proc to find all processes running in isolated mount namespaces.
+// FindIsolatedProcesses scans /proc to find isolated processes (or active user/service processes if none are isolated).
 func FindIsolatedProcesses() ([]IsolatedProcess, error) {
-	hostMntNS, err := GetNamespaceInode(1, "mnt")
-	if err != nil {
-		// Fallback to our own process namespace
-		hostMntNS, err = GetNamespaceInode(os.Getpid(), "mnt")
-		if err != nil {
-			return nil, err
-		}
-	}
+	hostMntNS, _ := GetNamespaceInode(1, "mnt")
+	hostNetNS, _ := GetNamespaceInode(1, "net")
+	hostPidNS, _ := GetNamespaceInode(1, "pid")
+	hostUserNS, _ := GetNamespaceInode(1, "user")
+	hostIpcNS, _ := GetNamespaceInode(1, "ipc")
 
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
 	}
 
-	var processes []IsolatedProcess
+	var isolatedProcesses []IsolatedProcess
+	var allProcesses []IsolatedProcess
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -44,28 +44,60 @@ func FindIsolatedProcesses() ([]IsolatedProcess, error) {
 			continue
 		}
 
-		targetMntNS, err := GetNamespaceInode(pid, "mnt")
-		if err != nil {
-			// May fail due to process termination or permission limits
+		name, _ := util.GetProcessName(pid)
+		cmdline, _ := util.GetCmdline(pid)
+		if name == "" {
 			continue
 		}
 
-		if targetMntNS != hostMntNS {
-			name, _ := util.GetProcessName(pid)
-			cmdline, _ := util.GetCmdline(pid)
-			score := 100
-			if report, err := GenerateReport(pid, name, cmdline, true); err == nil {
-				score = report.OverallScore
-			}
-			processes = append(processes, IsolatedProcess{
-				PID:        pid,
-				Name:       name,
-				Cmdline:    cmdline,
-				MountInode: targetMntNS,
-				Score:      score,
-			})
+		targetMntNS, _ := GetNamespaceInode(pid, "mnt")
+		targetNetNS, _ := GetNamespaceInode(pid, "net")
+		targetPidNS, _ := GetNamespaceInode(pid, "pid")
+		targetUserNS, _ := GetNamespaceInode(pid, "user")
+		targetIpcNS, _ := GetNamespaceInode(pid, "ipc")
+
+		isIsolated := (hostMntNS != 0 && targetMntNS != 0 && targetMntNS != hostMntNS) ||
+			(hostNetNS != 0 && targetNetNS != 0 && targetNetNS != hostNetNS) ||
+			(hostPidNS != 0 && targetPidNS != 0 && targetPidNS != hostPidNS) ||
+			(hostUserNS != 0 && targetUserNS != 0 && targetUserNS != hostUserNS) ||
+			(hostIpcNS != 0 && targetIpcNS != 0 && targetIpcNS != hostIpcNS)
+
+		procObj := IsolatedProcess{
+			PID:        pid,
+			Name:       name,
+			Cmdline:    cmdline,
+			MountInode: targetMntNS,
+			Score:      100,
+		}
+
+		allProcesses = append(allProcesses, procObj)
+		if isIsolated {
+			isolatedProcesses = append(isolatedProcesses, procObj)
 		}
 	}
 
-	return processes, nil
+	targetList := allProcesses
+	if len(isolatedProcesses) > 0 {
+		targetList = isolatedProcesses
+	}
+
+	// Calculate exact security scores concurrently for all PID cards
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, 16)
+
+	for i := range targetList {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			if rep, err := GenerateReport(targetList[idx].PID, targetList[idx].Name, targetList[idx].Cmdline, true); err == nil {
+				targetList[idx].Score = rep.OverallScore
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	return targetList, nil
 }
