@@ -166,9 +166,6 @@ Once running, navigate to `http://localhost:8080` (or your host IP) in your brow
 
 #### Console Screenshots & Dashboard Views:
 
-##### 🖥️ Web Console Main Dashboard
-![Nspect Web Console Overview](assets/webserver.png)
-
 ##### 🌐 Namespace Isolation Audit
 ![Namespace Isolation Audit](assets/namespaces.png)
 
