@@ -1172,6 +1172,53 @@ const htmlTemplate = `<!DOCTYPE html>
                         {{end}}
                     </div>
                 </details>
+                <!-- 12. CVE Intelligence & Vulnerability Risks -->
+                {{if .CVEs}}
+                <details open>
+                    <summary>
+                        <div class="summary-left">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                            <span>[12] Potential Container & Kernel CVE Exposures</span>
+                        </div>
+                        <div class="summary-right">
+                            <span class="badge risk-critical">{{len .CVEs}} CVE Risk(s)</span>
+                            <svg class="caret" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5H7z"/></svg>
+                        </div>
+                    </summary>
+                    <div class="section-content">
+                        <div class="risk-list">
+                            {{range .CVEs}}
+                            <div class="risk-card" style="border-left: 4px solid var(--critical);">
+                                <div class="risk-header">
+                                    <span class="risk-title" style="font-size: 1.1rem; color: #f87171;">{{.ID}}: {{.Title}}</span>
+                                    <span class="badge {{riskClass .Severity}}">{{.Severity}} {{if .CVSSScore}}(CVSS {{.CVSSScore}}){{end}}</span>
+                                </div>
+                                <div style="font-size: 0.85rem; color: var(--accent); margin-bottom: 0.5rem; font-weight: 600;">Affected Component: {{.Component}}</div>
+                                <p class="risk-desc" style="margin-bottom: 0.75rem;">{{.Description}}</p>
+                                <div style="background: #020617; padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); margin-bottom: 0.75rem; font-size: 0.85rem;">
+                                    <div><strong>Exploit Vector:</strong> <span style="font-family: monospace; color: var(--high);">{{.ExploitVector}}</span></div>
+                                    <div style="margin-top: 0.25rem;"><strong>Mitigation:</strong> {{.Mitigation}}</div>
+                                </div>
+                                {{if .URL}}
+                                <div style="font-size: 0.85rem;">
+                                    <strong>Primary Reference:</strong> <a href="{{.URL}}" target="_blank" style="color: #60a5fa; text-decoration: underline;">{{.URL}}</a>
+                                </div>
+                                {{end}}
+                                {{if .References}}
+                                <div style="font-size: 0.8rem; margin-top: 0.4rem; color: var(--text-secondary);">
+                                    <strong>Additional References:</strong>
+                                    <ul style="margin-left: 1.5rem; margin-top: 0.2rem;">
+                                        {{range .References}}
+                                        <li><a href="{{.}}" target="_blank" style="color: var(--text-secondary); text-decoration: underline;">{{.}}</a></li>
+                                        {{end}}
+                                    </ul>
+                                </div>
+                                {{end}}
+                            </div>
+                            {{end}}
+                        </div>
+                    </div>
+                </details>
                 {{end}}
             </div>
         </div>

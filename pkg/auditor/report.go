@@ -24,6 +24,7 @@ type AuditReport struct {
 	ProcessTree  *ProcessTreeAuditResult `json:"process_tree,omitempty"`
 	Kernel       *KernelAuditResult    `json:"kernel,omitempty"`
 	Remediations *RemediationArtifacts `json:"remediations,omitempty"`
+	CVEs         []CVEFinding          `json:"cves,omitempty"`
 	OverallScore int                   `json:"overall_score"`
 }
 
@@ -103,6 +104,7 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 	}
 
 	report.Remediations = GenerateRemediations(report)
+	report.CVEs = EvaluateCVEs(report)
 
 	return report, nil
 }
@@ -579,6 +581,22 @@ func (r *AuditReport) RenderCLI() string {
 				sb.WriteString(fmt.Sprintf("    %s\n", l))
 			}
 			sb.WriteString("\n")
+		}
+	}
+
+	// 12. Potential Container & Kernel CVE Exposure Matrix
+	if len(r.CVEs) > 0 {
+		sb.WriteString(fmt.Sprintf("%s[12] POTENTIAL CONTAINER & KERNEL CVE EXPOSURES%s (%d Detected)\n", Bold+Underline, Reset, len(r.CVEs)))
+		for _, cve := range r.CVEs {
+			color := Yellow
+			if cve.Severity == "CRITICAL" || cve.Severity == "HIGH" {
+				color = Red
+			}
+			sb.WriteString(fmt.Sprintf("  %s%-16s%s [%s%-8s%s] Component: %s\n", Bold, cve.ID, Reset, color, cve.Severity, Reset, cve.Component))
+			sb.WriteString(fmt.Sprintf("    Title      : %s\n", cve.Title))
+			sb.WriteString(fmt.Sprintf("    Vector     : %s\n", cve.ExploitVector))
+			sb.WriteString(fmt.Sprintf("    Mitigation : %s\n", cve.Mitigation))
+			sb.WriteString(fmt.Sprintf("    Reference  : %s%s%s\n\n", Blue+Underline, cve.URL, Reset))
 		}
 	}
 

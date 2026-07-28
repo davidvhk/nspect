@@ -1514,6 +1514,10 @@ const DashboardHTML = `<!DOCTYPE html>
                     <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
                     Hardening Generator
                 </button>
+                <button class="tab-btn" data-tab="tab-cves" style="color: #f87171; border-color: rgba(239, 68, 68, 0.4);">
+                    <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                    CVE Intelligence
+                </button>
             </div>
 
             <!-- Scrollable Reports -->
@@ -2011,6 +2015,23 @@ const DashboardHTML = `<!DOCTYPE html>
                             Production-ready Kubernetes Deployment manifest with hardened Pod and Container <code>securityContext</code>.
                         </div>
                         <pre style="background: #0d1117; color: #4ade80; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; border: 1px solid var(--border-color);" id="artifact-k8s-code"></pre>
+                    </div>
+                </div>
+
+                <!-- 12. CVE Intelligence Tab -->
+                <div class="tab-pane" id="tab-cves">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem; background: var(--bg-card); padding: 1rem 1.5rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                        <div>
+                            <h3 style="color: #fff; font-size: 1.1rem; margin-bottom: 0.2rem;">CVE Vulnerability Risk Matrix</h3>
+                            <div style="font-size: 0.85rem; color: var(--text-secondary);" id="cve-db-status">Matched against native rule engine & local CVE database</div>
+                        </div>
+                        <button class="btn-export primary" onclick="syncCVEDB()" id="sync-cve-btn">
+                            <svg viewBox="0 0 24 24" style="width: 14px; height: 14px;"><path d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"/></svg>
+                            Sync CVE Database
+                        </button>
+                    </div>
+                    <div id="cve-cards-list" style="display: flex; flex-direction: column; gap: 1rem;">
+                        <!-- Populated dynamically via JS -->
                     </div>
                 </div>
 
@@ -2977,6 +2998,48 @@ const DashboardHTML = `<!DOCTYPE html>
 
             if (rems.systemd_override_path) {
                 document.getElementById('systemd-override-desc').textContent = 'Auto-generated drop-in file enforcing NoNewPrivileges, PrivateTmp, ProtectKernelTunables, ProtectControlGroups, and resource limits for target path: ' + rems.systemd_override_path;
+            }
+
+            // 12. CVE Intelligence Tab
+            const cvesList = document.getElementById('cve-cards-list');
+            cvesList.innerHTML = '';
+            const cves = report.cves || [];
+            if (!cves || cves.length === 0) {
+                cvesList.innerHTML = '<div style="background: var(--bg-card); padding: 2rem; border-radius: 8px; border: 1px solid var(--border-color); text-align: center; color: var(--text-secondary);"><svg viewBox="0 0 24 24" style="width: 48px; height: 48px; fill: var(--color-success); margin-bottom: 0.5rem;"><path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M11,16.5L18,9.5L16.59,8.09L11,13.67L7.91,10.59L6.5,12L11,16.5Z"/></svg><div style="font-size: 1.1rem; color: #fff; font-weight: 600; margin-bottom: 0.25rem;">No Known High-Risk Container/Kernel CVEs Triggered</div><div>No active runtime misconfiguration matches current CVE breakout vectors.</div></div>';
+            } else {
+                cves.forEach(cve => {
+                    const card = document.createElement('div');
+                    card.className = 'section-card';
+                    card.style.borderLeft = '4px solid var(--color-danger)';
+                    let refsHTML = '';
+                    if (cve.references && cve.references.length > 0) {
+                        refsHTML = '<div style="font-size: 0.8rem; margin-top: 0.5rem; color: var(--text-secondary);"><strong>Additional References:</strong><ul style="margin-left: 1.25rem; margin-top: 0.2rem;">' + cve.references.map(r => '<li><a href="' + escapeHTML(r) + '" target="_blank" style="color: var(--text-secondary); text-decoration: underline;">' + escapeHTML(r) + '</a></li>').join('') + '</ul></div>';
+                    }
+                    card.innerHTML = '<div class="section-card-title"><div class="section-card-title-text" style="color:#f87171">' + escapeHTML(cve.id) + ': ' + escapeHTML(cve.title) + '</div><span class="risk-badge critical">' + escapeHTML(cve.severity) + (cve.cvss_score ? ' (CVSS ' + cve.cvss_score + ')' : '') + '</span></div><div style="font-size: 0.85rem; color: var(--accent); margin-bottom: 0.5rem; font-weight: 600;">Affected Component: ' + escapeHTML(cve.component) + '</div><div style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0.75rem;">' + escapeHTML(cve.description) + '</div><div style="background: #020617; padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); margin-bottom: 0.75rem; font-size: 0.85rem;"><div><strong>Exploit Vector:</strong> <span style="font-family: var(--font-mono); color: var(--color-warning);">' + escapeHTML(cve.exploit_vector) + '</span></div><div style="margin-top: 0.25rem;"><strong>Mitigation:</strong> ' + escapeHTML(cve.mitigation) + '</div></div>' + (cve.url ? '<div style="font-size: 0.85rem;"><strong>Primary NVD Reference:</strong> <a href="' + escapeHTML(cve.url) + '" target="_blank" style="color: #60a5fa; text-decoration: underline; word-break: break-all;">' + escapeHTML(cve.url) + '</a></div>' : '') + refsHTML;
+                    cvesList.appendChild(card);
+                });
+            }
+        }
+
+        async function syncCVEDB() {
+            const btn = document.getElementById('sync-cve-btn');
+            const origText = btn.innerHTML;
+            btn.innerHTML = 'Syncing...';
+            btn.disabled = true;
+            try {
+                const response = await fetch('/api/cve/sync', { method: 'POST' });
+                const resData = await response.json();
+                if (!response.ok) {
+                    alert('Sync failed: ' + (resData.error || 'Unknown error'));
+                } else {
+                    document.getElementById('cve-db-status').textContent = 'Loaded ' + resData.rule_count + ' CVE rules from ' + resData.db_path + ' | Last Updated: ' + resData.last_updated;
+                    alert('✓ ' + resData.message + '\n\nTotal Rules: ' + resData.rule_count + '\nUpdated: ' + resData.last_updated);
+                }
+            } catch (err) {
+                alert('Error syncing CVE database: ' + err.message);
+            } finally {
+                btn.innerHTML = origText;
+                btn.disabled = false;
             }
         }
 

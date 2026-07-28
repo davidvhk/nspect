@@ -32,6 +32,7 @@ func Start(host string, port int) error {
 	mux.HandleFunc("/api/audit/", handleAudit)
 	mux.HandleFunc("/api/tree", handleTree)
 	mux.HandleFunc("/api/kernel", handleKernel)
+	mux.HandleFunc("/api/cve/sync", handleCVESync)
 
 	fmt.Printf("%s[+] Starting nspect web console on http://%s:%d%s\n", auditor.Bold+auditor.Green, host, port, auditor.Reset)
 	fmt.Printf("[+] Auditing server ready. Scan isolated containers or input target PIDs.\n")
@@ -197,4 +198,23 @@ func handleKernel(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, kernelResult)
+}
+
+// handleCVESync syncs CVE database online or falls back to embedded rules
+func handleCVESync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST method required"})
+		return
+	}
+	if err := auditor.SyncCVEDatabase(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed syncing CVE database: %v", err)})
+		return
+	}
+	db := auditor.LoadCVEDatabase()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message":      "CVE Database successfully synchronized!",
+		"last_updated": db.LastUpdated,
+		"rule_count":   len(db.Rules),
+		"db_path":      auditor.GetUserDBPath(),
+	})
 }

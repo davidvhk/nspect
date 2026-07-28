@@ -63,6 +63,7 @@ func main() {
 	var failOnSeccompDisabledFlag bool
 
 	var applyOverrideFlag bool
+	var syncCVEFlag bool
 
 	flag.StringVar(&pidFlag, "pid", "", "Audit the specified process ID")
 	flag.StringVar(&pidFlag, "p", "", "Audit the specified process ID")
@@ -81,6 +82,7 @@ func main() {
 	flag.StringVar(&hostFlag, "host", "127.0.0.1", "Host address for the web console to listen on")
 	flag.IntVar(&portFlag, "port", 8080, "Port for the web console to listen on")
 	flag.BoolVar(&applyOverrideFlag, "apply-override", false, "Automatically write auto-generated systemd service override.conf to disk")
+	flag.BoolVar(&syncCVEFlag, "sync-cve", false, "Sync local CVE vulnerability database online or update local rules file")
 	flag.BoolVar(&helpFlag, "help", false, "Show this help message")
 	flag.BoolVar(&helpFlag, "h", false, "Show this help message")
 
@@ -99,6 +101,21 @@ func main() {
 
 	if helpFlag {
 		printUsage()
+		os.Exit(0)
+	}
+
+	// Handle CVE database sync
+	if syncCVEFlag {
+		fmt.Printf("%s[+] Synchronizing local CVE vulnerability database...%s\n", auditor.Bold+auditor.Cyan, auditor.Reset)
+		if err := auditor.SyncCVEDatabase(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error syncing CVE database: %v\n", err)
+			os.Exit(1)
+		}
+		db := auditor.LoadCVEDatabase()
+		fmt.Printf("%s[✓] CVE Database successfully updated!%s\n", auditor.Bold+auditor.Green, auditor.Reset)
+		fmt.Printf("    Path        : %s\n", auditor.GetUserDBPath())
+		fmt.Printf("    Total Rules : %d\n", len(db.Rules))
+		fmt.Printf("    Last Updated: %s\n", db.LastUpdated)
 		os.Exit(0)
 	}
 
