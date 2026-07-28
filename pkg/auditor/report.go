@@ -23,6 +23,7 @@ type AuditReport struct {
 	Systemd      *SystemdAuditResult   `json:"systemd,omitempty"`
 	ProcessTree  *ProcessTreeAuditResult `json:"process_tree,omitempty"`
 	Kernel       *KernelAuditResult    `json:"kernel,omitempty"`
+	Remediations *RemediationArtifacts `json:"remediations,omitempty"`
 	OverallScore int                   `json:"overall_score"`
 }
 
@@ -50,22 +51,22 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 
 	envResult, err := AuditEnv(pid, maskSecrets)
 	if err != nil {
-		envResult = &EnvAuditResult{Secrets: nil, Score: 100}
+		envResult = &EnvAuditResult{Score: 100}
 	}
 
 	netResult, err := AuditNetwork(pid)
 	if err != nil {
-		netResult = &NetAuditResult{ListeningPorts: nil, Connections: nil}
+		netResult = &NetAuditResult{}
 	}
 
 	fdResult, err := AuditFD(pid)
 	if err != nil {
-		fdResult = &FDAuditResult{FDs: nil, Score: 100}
+		fdResult = &FDAuditResult{Score: 100}
 	}
 
 	fsResult, err := AuditFilesystem(pid)
 	if err != nil {
-		fsResult = &FilesystemAuditResult{Risks: nil, Score: 100}
+		fsResult = &FilesystemAuditResult{Score: 100}
 	}
 
 	sysdResult, err := AuditSystemd(pid, name)
@@ -84,7 +85,7 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		overall = (nsResult.Score*18 + capResult.Score*18 + mountResult.Score*14 + secResult.Score*14 + envResult.Score*10 + fsResult.Score*10 + fdResult.Score*8 + sysdResult.Score*8) / 100
 	}
 
-	return &AuditReport{
+	report := &AuditReport{
 		PID:          pid,
 		ProcessName:  name,
 		Cmdline:      cmdline,
@@ -99,7 +100,11 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		Systemd:      sysdResult,
 		ProcessTree:  treeResult,
 		OverallScore: overall,
-	}, nil
+	}
+
+	report.Remediations = GenerateRemediations(report)
+
+	return report, nil
 }
 
 // RenderJSON formats the report in JSON.
@@ -530,6 +535,51 @@ func (r *AuditReport) RenderCLI() string {
 			sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, rec))
 		}
 		sb.WriteString("\n")
+	}
+
+	// 11. Auto-Generated Hardening Artifacts & Snippets
+	if r.Remediations != nil {
+		sb.WriteString(fmt.Sprintf("%s[11] AUTO-GENERATED HARDENING ARTIFACTS & OVERRIDES%s\n", Bold+Underline, Reset))
+		
+		if r.Remediations.SystemdOverride != "" {
+			sb.WriteString(fmt.Sprintf("  %s%sSystemd Service Drop-In Override (%s):%s\n", Bold, Cyan, r.Remediations.SystemdOverridePath, Reset))
+			for _, l := range strings.Split(strings.TrimSpace(r.Remediations.SystemdOverride), "\n") {
+				sb.WriteString(fmt.Sprintf("    %s\n", l))
+			}
+			sb.WriteString("\n")
+		}
+
+		if r.Remediations.DockerCLI != "" {
+			sb.WriteString(fmt.Sprintf("  %s%sHardened Docker Run Command:%s\n", Bold, Cyan, Reset))
+			for _, l := range strings.Split(r.Remediations.DockerCLI, "\n") {
+				sb.WriteString(fmt.Sprintf("    %s\n", l))
+			}
+			sb.WriteString("\n")
+		}
+
+		if r.Remediations.DockerCompose != "" {
+			sb.WriteString(fmt.Sprintf("  %s%sHardened Docker Compose Service Snippet:%s\n", Bold, Cyan, Reset))
+			for _, l := range strings.Split(r.Remediations.DockerCompose, "\n") {
+				sb.WriteString(fmt.Sprintf("    %s\n", l))
+			}
+			sb.WriteString("\n")
+		}
+
+		if r.Remediations.KubernetesYAML != "" {
+			sb.WriteString(fmt.Sprintf("  %s%sKubernetes Hardened SecurityContext Manifest:%s\n", Bold, Cyan, Reset))
+			for _, l := range strings.Split(r.Remediations.KubernetesYAML, "\n") {
+				sb.WriteString(fmt.Sprintf("    %s\n", l))
+			}
+			sb.WriteString("\n")
+		}
+
+		if r.Remediations.SysctlConf != "" {
+			sb.WriteString(fmt.Sprintf("  %s%sHost Sysctl Hardening Configuration (/etc/sysctl.d/99-nspect-hardening.conf):%s\n", Bold, Cyan, Reset))
+			for _, l := range strings.Split(strings.TrimSpace(r.Remediations.SysctlConf), "\n") {
+				sb.WriteString(fmt.Sprintf("    %s\n", l))
+			}
+			sb.WriteString("\n")
+		}
 	}
 
 	return sb.String()

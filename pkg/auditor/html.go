@@ -395,6 +395,8 @@ const htmlTemplate = `<!DOCTYPE html>
             font-weight: 600;
             border-radius: 9999px;
             text-transform: uppercase;
+            white-space: nowrap;
+            display: inline-block;
         }
 
         .badge.score {
@@ -1084,9 +1086,9 @@ const htmlTemplate = `<!DOCTYPE html>
                                     <td style="padding: 6px; font-family: monospace;"><strong>{{.Name}}</strong></td>
                                     <td style="padding: 6px;">
                                         {{if .IsSecure}}
-                                        <span class="badge risk-low">✓ {{.CurrentValue}}</span>
+                                        <span class="badge risk-info">✓ {{.CurrentValue}}</span>
                                         {{else}}
-                                        <span class="badge risk-high">✗ {{if .CurrentValue}}{{.CurrentValue}}{{else}}Missing{{end}}</span>
+                                        <span class="badge risk-high">✗ {{.CurrentValue}}</span>
                                         {{end}}
                                     </td>
                                     <td style="padding: 6px; color: var(--text-secondary);">{{.Description}}</td>
@@ -1126,54 +1128,48 @@ const htmlTemplate = `<!DOCTYPE html>
                 </details>
                 {{end}}
 
-                <!-- 11. Kernel Attack Surface & Sysctl Audit -->
-                {{if .Kernel}}
+                <!-- 11. Auto-Generated Hardening Artifacts & Overrides -->
+                {{if .Remediations}}
                 <details open>
                     <summary>
                         <div class="summary-left">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                            <span>[11] Kernel Attack Surface & Sysctl Audit</span>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+                            <span>[11] Auto-Generated Hardening Artifacts & Overrides</span>
                         </div>
                         <div class="summary-right">
-                            <span class="badge score {{scoreClass .Kernel.Score}}">Score: {{.Kernel.Score}}/100</span>
+                            <span class="badge info">Remediation Generator</span>
                             <svg class="caret" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5H7z"/></svg>
                         </div>
                     </summary>
                     <div class="section-content">
-                        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-                            Host kernel sysctl hardening knobs (eBPF, JIT, KASLR address leaks, YAMA ptrace, symlink protections).
+                        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                            Production-ready hardening artifacts auto-generated for Systemd, Docker CLI, Docker Compose, Kubernetes, and Host Sysctls.
                         </div>
-                        <table style="width: 100%; font-size: 0.8rem; border-collapse: collapse; margin-bottom: 1rem;">
-                            <thead>
-                                <tr style="text-align: left; border-bottom: 1px solid var(--border-color);">
-                                    <th style="padding: 6px;">Sysctl Knob</th>
-                                    <th style="padding: 6px;">Current Value</th>
-                                    <th style="padding: 6px;">Status</th>
-                                    <th style="padding: 6px;">Description / Remediation</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {{range .Kernel.Sysctls}}
-                                <tr style="border-bottom: 1px solid var(--border-color);">
-                                    <td style="padding: 6px; font-family: monospace;"><strong>{{.Key}}</strong></td>
-                                    <td style="padding: 6px; font-family: monospace; color: var(--accent);">{{.CurrentValue}}</td>
-                                    <td style="padding: 6px;">
-                                        {{if .IsSecure}}
-                                        <span class="badge risk-low">✓ Secure</span>
-                                        {{else}}
-                                        <span class="badge {{riskClass .RiskLevel}}">✗ {{.RiskLevel}}</span>
-                                        {{end}}
-                                    </td>
-                                    <td style="padding: 6px; color: var(--text-secondary);">
-                                        {{.Description}}
-                                        {{if .Remediation}}
-                                        <div style="font-family: monospace; color: var(--accent); margin-top: 2px;">Rec: {{.Remediation}}</div>
-                                        {{end}}
-                                    </td>
-                                </tr>
-                                {{end}}
-                            </tbody>
-                        </table>
+
+                        {{if .Remediations.SystemdOverride}}
+                        <div style="font-weight: 600; font-size: 0.9rem; color: var(--color-primary); margin-bottom: 0.4rem;">Systemd Service Drop-In Override ({{.Remediations.SystemdOverridePath}}):</div>
+                        <pre style="background: #0d1117; color: #a5f3fc; padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; margin-bottom: 1.5rem; border: 1px solid var(--border-color);">{{.Remediations.SystemdOverride}}</pre>
+                        {{end}}
+
+                        {{if .Remediations.DockerCLI}}
+                        <div style="font-weight: 600; font-size: 0.9rem; color: #38bdf8; margin-bottom: 0.4rem;">Hardened Docker CLI Command:</div>
+                        <pre style="background: #0d1117; color: #38bdf8; padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; margin-bottom: 1.5rem; border: 1px solid var(--border-color);">{{.Remediations.DockerCLI}}</pre>
+                        {{end}}
+
+                        {{if .Remediations.DockerCompose}}
+                        <div style="font-weight: 600; font-size: 0.9rem; color: #f472b6; margin-bottom: 0.4rem;">Docker Compose Hardened Service Block:</div>
+                        <pre style="background: #0d1117; color: #f472b6; padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; margin-bottom: 1.5rem; border: 1px solid var(--border-color);">{{.Remediations.DockerCompose}}</pre>
+                        {{end}}
+
+                        {{if .Remediations.KubernetesYAML}}
+                        <div style="font-weight: 600; font-size: 0.9rem; color: #4ade80; margin-bottom: 0.4rem;">Kubernetes Hardened SecurityContext Manifest:</div>
+                        <pre style="background: #0d1117; color: #4ade80; padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; margin-bottom: 1.5rem; border: 1px solid var(--border-color);">{{.Remediations.KubernetesYAML}}</pre>
+                        {{end}}
+
+                        {{if .Remediations.SysctlConf}}
+                        <div style="font-weight: 600; font-size: 0.9rem; color: var(--medium); margin-bottom: 0.4rem;">Host Sysctl Hardening Config (/etc/sysctl.d/99-nspect-hardening.conf):</div>
+                        <pre style="background: #0d1117; color: var(--medium); padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; border: 1px solid var(--border-color);">{{.Remediations.SysctlConf}}</pre>
+                        {{end}}
                     </div>
                 </details>
                 {{end}}
