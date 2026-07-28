@@ -217,7 +217,8 @@ func GetDefaultCVEDatabase() *CVEDatabase {
 						"https://www.benthamsgaze.org/2020/12/01/cve-2020-15257-containerd-shim-api-exposure/",
 					},
 				},
-				RequireSharedNetNS: true,
+				RequireSharedNetNS:   true,
+				RequireContainerized: true,
 			},
 			{
 				CVE: CVEFinding{

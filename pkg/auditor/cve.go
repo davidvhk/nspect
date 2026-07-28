@@ -42,6 +42,7 @@ type CVERule struct {
 	RequireSUIDBinaries    bool       `json:"require_suid_binaries,omitempty"`
 	RequireSecretsExposed  bool       `json:"require_secrets_exposed,omitempty"`
 	RequireSeccompDisabled bool       `json:"require_seccomp_disabled,omitempty"`
+	RequireContainerized   bool       `json:"require_containerized,omitempty"`
 }
 
 // CVEDatabase represents the full rule collection.
@@ -155,9 +156,25 @@ func EvaluateCVEs(report *AuditReport) []CVEFinding {
 	hasSecrets := report.Env != nil && len(report.Env.Secrets) > 0
 	isSeccompDisabled := report.Security != nil && report.Security.SeccompMode == 0
 
+	isContainerized := false
+	if report.Namespaces != nil {
+		for _, ns := range report.Namespaces.Namespaces {
+			if (ns.Name == "mnt" || ns.Name == "pid" || ns.Name == "uts" || ns.Name == "ipc") && !ns.IsSharedWithHost {
+				isContainerized = true
+				break
+			}
+		}
+	}
+	if report.Security != nil && report.Security.UserNSMapped {
+		isContainerized = true
+	}
+
 	for _, rule := range db.Rules {
 		matched := true
 
+		if rule.RequireContainerized && !isContainerized {
+			matched = false
+		}
 		if rule.RequireHostFDLeak && !hasFDLeak {
 			matched = false
 		}
