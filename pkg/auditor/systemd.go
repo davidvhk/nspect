@@ -278,9 +278,28 @@ func AuditSystemd(pid int, procName string) (*SystemdAuditResult, error) {
 			snippetBuilder.WriteString(def.RecommendedValue + "\n")
 		}
 
+		var displayVal string
+		if !isFound {
+			displayVal = "MISSING"
+		} else if isSecure {
+			valUpper := strings.ToUpper(val)
+			if valUpper == "YES" || valUpper == "TRUE" || valUpper == "1" || valUpper == "" {
+				displayVal = "YES"
+			} else {
+				displayVal = valUpper
+			}
+		} else {
+			valUpper := strings.ToUpper(val)
+			if valUpper == "NO" || valUpper == "FALSE" || valUpper == "0" || valUpper == "" {
+				displayVal = "NO"
+			} else {
+				displayVal = "DISABLED"
+			}
+		}
+
 		directiveChecks = append(directiveChecks, SystemdDirectiveCheck{
 			Name:             def.Key,
-			CurrentValue:     val,
+			CurrentValue:     displayVal,
 			IsConfigured:     isFound,
 			IsSecure:         isSecure,
 			Description:      def.Description,

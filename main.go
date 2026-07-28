@@ -62,6 +62,8 @@ func main() {
 	var failOnFSRisksFlag bool
 	var failOnSeccompDisabledFlag bool
 
+	var applyOverrideFlag bool
+
 	flag.StringVar(&pidFlag, "pid", "", "Audit the specified process ID")
 	flag.StringVar(&pidFlag, "p", "", "Audit the specified process ID")
 	flag.BoolVar(&listFlag, "list", false, "List all running isolated processes")
@@ -78,6 +80,7 @@ func main() {
 	flag.BoolVar(&serverFlag, "s", false, "Start lightweight web console")
 	flag.StringVar(&hostFlag, "host", "127.0.0.1", "Host address for the web console to listen on")
 	flag.IntVar(&portFlag, "port", 8080, "Port for the web console to listen on")
+	flag.BoolVar(&applyOverrideFlag, "apply-override", false, "Automatically write auto-generated systemd service override.conf to disk")
 	flag.BoolVar(&helpFlag, "help", false, "Show this help message")
 	flag.BoolVar(&helpFlag, "h", false, "Show this help message")
 
@@ -190,7 +193,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 5. Output Results
+	// 5. Apply systemd override if requested
+	if applyOverrideFlag {
+		if report.Remediations != nil && report.Remediations.SystemdOverride != "" {
+			path, err := auditor.ApplySystemdOverride(report.Remediations)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s[!] Error applying systemd override: %v%s\n", auditor.Bold+auditor.Red, err, auditor.Reset)
+			} else {
+				fmt.Printf("%s%s[+] Systemd override successfully written to %s%s\n", auditor.Bold, auditor.Green, path, auditor.Reset)
+				fmt.Printf("Run 'sudo systemctl daemon-reload && sudo systemctl restart %s' to apply changes.\n\n", report.Systemd.UnitName)
+			}
+		} else {
+			fmt.Printf("%s[!] No systemd override configuration available for target PID %d.%s\n\n", auditor.Yellow, targetPID, auditor.Reset)
+		}
+	}
+
+	// 6. Output Results
 	if jsonFlag {
 		jsonStr, err := report.RenderJSON()
 		if err != nil {

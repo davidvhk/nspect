@@ -129,6 +129,22 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch action {
+	case "apply-override":
+		if report.Remediations == nil || report.Remediations.SystemdOverride == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No systemd override configuration available for this process"})
+			return
+		}
+		path, err := auditor.ApplySystemdOverride(report.Remediations)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to write override file: %v", err)})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"message": fmt.Sprintf("Systemd override successfully written to %s", path),
+			"path":    path,
+			"reload_command": fmt.Sprintf("sudo systemctl daemon-reload && sudo systemctl restart %s", report.Systemd.UnitName),
+		})
+
 	case "html":
 		htmlStr, err := report.RenderHTML()
 		if err != nil {

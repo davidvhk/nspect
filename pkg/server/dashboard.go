@@ -1029,6 +1029,7 @@ const DashboardHTML = `<!DOCTYPE html>
             padding: 0.15rem 0.45rem;
             border-radius: 4px;
             display: inline-block;
+            white-space: nowrap;
         }
 
         .risk-badge.critical { background-color: var(--color-danger-glow); color: var(--color-danger); border: 1px solid rgba(239, 68, 68, 0.3); }
@@ -1509,6 +1510,10 @@ const DashboardHTML = `<!DOCTYPE html>
                     <svg viewBox="0 0 24 24"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M12,6A6,6 0 0,0 6,12A6,6 0 0,0 12,18A6,6 0 0,0 18,12A6,6 0 0,0 12,6M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8Z"/></svg>
                     Secrets
                 </button>
+                <button class="tab-btn" data-tab="tab-artifacts" style="color: #60a5fa; border-color: rgba(59, 130, 246, 0.4);">
+                    <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+                    Hardening Generator
+                </button>
             </div>
 
             <!-- Scrollable Reports -->
@@ -1948,6 +1953,64 @@ const DashboardHTML = `<!DOCTYPE html>
                                 </tbody>
                             </table>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Tab: Hardening Generator -->
+                <div class="tab-content" id="tab-artifacts">
+                    <div class="section-card">
+                        <div class="section-card-title">
+                            <div class="section-card-title-text">
+                                <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+                                Systemd Drop-In Service Override Generator
+                            </div>
+                            <button class="btn-audit" id="apply-override-btn" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; background-color: var(--color-success);" onclick="applySystemdOverride()">
+                                ⚡ Write Override to /etc/systemd/system/
+                            </button>
+                        </div>
+                        <div style="margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--text-secondary);" id="systemd-override-desc">
+                            Auto-generated drop-in file enforcing NoNewPrivileges, PrivateTmp, ProtectKernelTunables, ProtectControlGroups, and resource limits.
+                        </div>
+                        <pre style="background: #0d1117; color: #a5f3fc; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; border: 1px solid var(--border-color);" id="artifact-systemd-code"></pre>
+                    </div>
+
+                    <div class="section-card" style="margin-top: 1.5rem;">
+                        <div class="section-card-title">
+                            <div class="section-card-title-text">
+                                <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+                                Hardened Docker CLI Command
+                            </div>
+                        </div>
+                        <div style="margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--text-secondary);">
+                            Optimized <code>docker run</code> command enforcing read-only rootfs, drop-all capabilities, non-root user, memory limits, and no-new-privileges.
+                        </div>
+                        <pre style="background: #0d1117; color: #38bdf8; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; border: 1px solid var(--border-color);" id="artifact-docker-code"></pre>
+                    </div>
+
+                    <div class="section-card" style="margin-top: 1.5rem;">
+                        <div class="section-card-title">
+                            <div class="section-card-title-text">
+                                <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+                                Docker Compose Hardened Service Block
+                            </div>
+                        </div>
+                        <div style="margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--text-secondary);">
+                            Hardened <code>docker-compose.yml</code> service block ready to paste into your Compose architecture.
+                        </div>
+                        <pre style="background: #0d1117; color: #f472b6; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; border: 1px solid var(--border-color);" id="artifact-compose-code"></pre>
+                    </div>
+
+                    <div class="section-card" style="margin-top: 1.5rem;">
+                        <div class="section-card-title">
+                            <div class="section-card-title-text">
+                                <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+                                Kubernetes Hardened SecurityContext Manifest
+                            </div>
+                        </div>
+                        <div style="margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--text-secondary);">
+                            Production-ready Kubernetes Deployment manifest with hardened Pod and Container <code>securityContext</code>.
+                        </div>
+                        <pre style="background: #0d1117; color: #4ade80; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; border: 1px solid var(--border-color);" id="artifact-k8s-code"></pre>
                     </div>
                 </div>
 
@@ -2780,8 +2843,8 @@ const DashboardHTML = `<!DOCTYPE html>
                     sysd.directives.forEach(d => {
                         const tr = document.createElement('tr');
                         const statusBadge = d.is_secure 
-                            ? '<span class="risk-badge low">✓ ' + escapeHTML(d.current_value || 'Configured') + '</span>'
-                            : '<span class="risk-badge danger">✗ ' + escapeHTML(d.current_value || 'Missing') + '</span>';
+                            ? '<span class="risk-badge info">✓ ' + escapeHTML(d.current_value) + '</span>'
+                            : '<span class="risk-badge danger">✗ ' + escapeHTML(d.current_value) + '</span>';
                         tr.innerHTML = '<td style="font-family:var(--font-mono);font-weight:600">' + escapeHTML(d.name) + '</td><td>' + statusBadge + '</td><td style="color:var(--text-secondary);font-size:0.85rem">' + escapeHTML(d.description) + '</td><td style="font-family:var(--font-mono);color:var(--accent)">' + escapeHTML(d.recommended_value) + '</td>';
                         directivesBody.appendChild(tr);
                     });
@@ -2903,6 +2966,39 @@ const DashboardHTML = `<!DOCTYPE html>
                     tr.innerHTML = '<td style="font-family:var(--font-mono);font-weight:600;color:#fff">' + escapeHTML(sec.key) + '</td><td><div class="secret-value-box"><span class="secret-value-text" id="sec-val-text-' + idx + '" data-val="' + escapeHTML(sec.value) + '">••••••••••••••••</span><button class="secret-mask-btn" onclick="toggleSecretMask(' + idx + ')">Show</button></div></td>';
                     secretsBody.appendChild(tr);
                 });
+            }
+
+            // 11. Hardening & Remediation Generator Tab
+            const rems = report.remediations || {};
+            document.getElementById('artifact-systemd-code').textContent = rems.systemd_override || '# No systemd override directives required or process is not a systemd unit.';
+            document.getElementById('artifact-docker-code').textContent = rems.docker_cli || '# Docker CLI command snippet unavailable.';
+            document.getElementById('artifact-compose-code').textContent = rems.docker_compose || '# Docker Compose snippet unavailable.';
+            document.getElementById('artifact-k8s-code').textContent = rems.kubernetes_yaml || '# Kubernetes securityContext snippet unavailable.';
+
+            if (rems.systemd_override_path) {
+                document.getElementById('systemd-override-desc').textContent = 'Auto-generated drop-in file enforcing NoNewPrivileges, PrivateTmp, ProtectKernelTunables, ProtectControlGroups, and resource limits for target path: ' + rems.systemd_override_path;
+            }
+        }
+
+        async function applySystemdOverride() {
+            if (!currentReportData || !currentReportData.pid) return;
+            const btn = document.getElementById('apply-override-btn');
+            const origText = btn.innerHTML;
+            btn.innerHTML = 'Writing Override...';
+            btn.disabled = true;
+            try {
+                const response = await fetch('/api/audit/' + currentReportData.pid + '/apply-override', { method: 'POST' });
+                const resData = await response.json();
+                if (!response.ok) {
+                    alert('Failed to write override: ' + (resData.error || 'Unknown error'));
+                } else {
+                    alert('✓ ' + resData.message + '\n\nRun:\n' + resData.reload_command);
+                }
+            } catch (err) {
+                alert('Error applying systemd override: ' + err.message);
+            } finally {
+                btn.innerHTML = origText;
+                btn.disabled = false;
             }
         }
 

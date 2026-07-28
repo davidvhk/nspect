@@ -49,7 +49,7 @@ Unlike static config parsers or traditional local privilege escalation scripts (
 - **Environment Secret Scanner:** Decodes `/proc/[pid]/environ` to scan for key patterns pointing to credentials, tokens, or passwords (`*PASS*`, `*SECRET*`, `*KEY*`, `*TOKEN*`), displaying them masked to avoid output leakage.
 - **Inner-Namespace Socket Analyzer:** Directly parses `/proc/[pid]/net/tcp` and `/proc/[pid]/net/tcp6` inside target network namespaces, exposing active listening ports and connections without needing namespace-entering tools.
 - **FD Leak Detector:** Catalogues `/proc/[pid]/fd/` descriptors and alerts on inherited host directories (abusable via `openat`), raw storage blocks, or critical configuration files.
-- **Process Auto-Detection:** Automatically lists all isolated sandboxes and containers currently running on the host without depending on external Docker/containerd APIs.
+- **Automated Hardening & Remediation Generator:** Auto-generates production-ready, copy-pasteable remediation artifacts for **Systemd** (`/etc/systemd/system/*.service.d/override.conf`), **Docker CLI** (`docker run`), **Docker Compose** (`docker-compose.yml`), **Kubernetes SecurityContext** (`deployment.yaml`), and **Host Sysctl** configurations (`/etc/sysctl.d/99-nspect-hardening.conf`). Includes an automated `--apply-override` CLI flag and one-click Web Console action buttons to apply systemd service overrides directly to disk.
 - **Zero-Dependency Portability:** Compiled into a single, statically-linked binary, making it extremely easy to copy and run on target hosts during security assessments.
 
 ---
@@ -116,7 +116,14 @@ sudo ./nspect -t
 ./nspect --pid <PID> --tree
 ```
 
-### 4. Mask Sensitive Environment Variables
+### 4. Auto-Apply Systemd Service Overrides
+Automatically write auto-generated systemd drop-in override files (`override.conf`) directly to `/etc/systemd/system/<service>.service.d/`:
+
+```bash
+sudo ./nspect --pid <PID> --apply-override
+```
+
+### 5. Mask Sensitive Environment Variables
 By default, `nspect` displays the values of environment variables identified as sensitive (e.g. passwords, paths, keys) in plaintext. You can optionally mask them with:
 
 ```bash
@@ -157,14 +164,21 @@ You can start a lightweight web server that serves an interactive web console. T
 
 Once running, navigate to `http://localhost:8080` (or your host IP) in your browser.
 
-#### Features:
-* **Live Container Scanning**: The sidebar automatically lists active sandboxed processes and lets you audit them with one click.
-* **Manual PID Auditing**: Enter any host PID to run a live privilege assessment instantly.
-* **Interactive Escape Walkthroughs**: View custom proof-of-concept commands inline to demonstrate and test breakouts.
-* **Multi-Format Export**: Download reports directly in JSON, HTML, or compile a complete multi-page PDF on the fly.
+#### Console Screenshots & Dashboard Views:
 
-![Nspect Web Console](assets/webserver.png)
+##### 🌐 Namespace Isolation Audit
+![Namespace Isolation Audit](assets/namespaces.png)
 
+##### 🛡️ Process Security Context & Linux Capabilities
+![Security Context & Capability Audit](assets/security.png)
+
+##### 🔒 Host Kernel Attack Surface & Sysctl Hardening Matrix
+![Host Kernel Attack Surface Audit](assets/kernel_hardening.png)
+
+##### ⚙️ Auto-Generated Hardening Generator (Systemd, Docker, Kubernetes)
+![Hardening Generator](assets/hardening_generator.png)
+
+##### 💡 Interactive Container Escape Walkthrough Modal
 ![Escape Walkthrough Modal](assets/poc_commands.png)
 
 ### 7. Example CLI Report Output
@@ -275,20 +289,62 @@ Security Score: 65/100
   - Established Connections:
     * [tcp] 192.168.1.80:22 -> 192.168.1.51:42984
 
-[11] KERNEL ATTACK SURFACE & SYSCTL AUDIT (Score: 75/100)
-  [✓] kernel.unprivileged_bpf_disabled     : 2        | Unprivileged eBPF program loading is disabled.
-  [✗] kernel.kptr_restrict                 : 0        | Rec: 1 or 2 (Kernel symbol addresses (%pK) are exposed in /proc/kallsyms.)
-  [✓] kernel.dmesg_restrict                : 1        | Access to kernel ring buffer (dmesg) is restricted.
-  [✓] kernel.yama.ptrace_scope             : 1        | YAMA ptrace restrictions are enforced.
-  [✗] kernel.unprivileged_userns_clone     : 1        | Rec: 0 (Unprivileged users can clone new user namespaces.)
-  [✓] user.max_user_namespaces             : 2147483647 | Max user namespaces set to 2147483647.
-  [✓] fs.protected_symlinks                : 1        | Symlink follow protections in sticky /tmp are enabled.
-  [✓] fs.protected_hardlinks               : 1        | Hardlink creation protections across owners are enabled.
-  [✓] fs.protected_fifos                   : 1        | FIFO pipe protections in sticky /tmp are enabled.
-
 RECOMMENDED REMEDIATIONS
   1. Set 'NoNewPrivileges=true' in systemd or '--security-opt=no-new-privileges' in Docker to prevent privilege escalation.
   2. Do not expose passwords, API keys, or security tokens in environment variables. Use secret stores (e.g. Docker Secrets, K8s Secrets, HashiCorp Vault) or mount credentials securely as files.
+
+[11] AUTO-GENERATED HARDENING ARTIFACTS & OVERRIDES
+  Hardened Docker Run Command:
+    docker run -d --name snapd-desktop-integration-hardened \
+      --security-opt no-new-privileges:true \
+      --read-only \
+      --user 10001:10001 \
+      --cap-drop=ALL \
+      --memory=512m \
+      --cpus=1.0 \
+      --tmpfs /tmp:rw,noexec,nosuid \
+      snapd-desktop-integration:latest
+
+  Hardened Docker Compose Service Snippet:
+      snapd-desktop-integration:
+        image: snapd-desktop-integration:latest
+        user: "10001:10001"
+        read_only: true
+        security_opt:
+          - no-new-privileges:true
+        cap_drop:
+          - ALL
+        tmpfs:
+          - /tmp:rw,noexec,nosuid
+        deploy:
+          resources:
+            limits:
+              cpus: '1.0'
+              memory: 512M
+
+  Kubernetes Hardened SecurityContext Manifest:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: snapd-desktop-integration-hardened
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: snapd-desktop-integration
+            image: snapd-desktop-integration:latest
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop:
+                - ALL
 ```
 
 ---
