@@ -2019,7 +2019,7 @@ const DashboardHTML = `<!DOCTYPE html>
                 </div>
 
                 <!-- 12. CVE Intelligence Tab -->
-                <div class="tab-pane" id="tab-cves">
+                <div class="tab-content" id="tab-cves">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem; background: var(--bg-card); padding: 1rem 1.5rem; border-radius: 8px; border: 1px solid var(--border-color);">
                         <div>
                             <h3 style="color: #fff; font-size: 1.1rem; margin-bottom: 0.2rem;">CVE Vulnerability Risk Matrix</h3>

@@ -43,6 +43,8 @@ type CVERule struct {
 	RequireSecretsExposed  bool       `json:"require_secrets_exposed,omitempty"`
 	RequireSeccompDisabled bool       `json:"require_seccomp_disabled,omitempty"`
 	RequireContainerized   bool       `json:"require_containerized,omitempty"`
+	RequireContainerRuntime bool      `json:"require_container_runtime,omitempty"`
+	RequireKubernetes       bool      `json:"require_kubernetes,omitempty"`
 }
 
 // CVEDatabase represents the full rule collection.
@@ -159,7 +161,7 @@ func EvaluateCVEs(report *AuditReport) []CVEFinding {
 	isContainerized := false
 	if report.Namespaces != nil {
 		for _, ns := range report.Namespaces.Namespaces {
-			if (ns.Name == "mnt" || ns.Name == "pid" || ns.Name == "uts" || ns.Name == "ipc") && !ns.IsSharedWithHost {
+			if (ns.Name == "pid" || ns.Name == "uts" || ns.Name == "ipc") && !ns.IsSharedWithHost {
 				isContainerized = true
 				break
 			}
@@ -169,10 +171,47 @@ func EvaluateCVEs(report *AuditReport) []CVEFinding {
 		isContainerized = true
 	}
 
+	hasContainerRuntime := false
+	if report.ProcessTree != nil {
+		for _, node := range report.ProcessTree.AncestorChain {
+			name := strings.ToLower(node.Name)
+			if strings.Contains(name, "containerd") || strings.Contains(name, "dockerd") || strings.Contains(name, "crio") || strings.Contains(name, "podman") || strings.Contains(name, "runc") || strings.Contains(name, "crun") || strings.Contains(name, "lxc") {
+				hasContainerRuntime = true
+				break
+			}
+		}
+	}
+
+	isKubernetes := false
+	if report.Env != nil {
+		for _, sec := range report.Env.Secrets {
+			if strings.Contains(sec.Key, "KUBERNETES") {
+				isKubernetes = true
+				break
+			}
+		}
+	}
+	if report.ProcessTree != nil {
+		for _, node := range report.ProcessTree.AncestorChain {
+			name := strings.ToLower(node.Name)
+			cmd := strings.ToLower(node.Cmdline)
+			if strings.Contains(name, "kubelet") || strings.Contains(name, "k8s") || strings.Contains(cmd, "kubelet") || strings.Contains(cmd, "kubepods") {
+				isKubernetes = true
+				break
+			}
+		}
+	}
+
 	for _, rule := range db.Rules {
 		matched := true
 
 		if rule.RequireContainerized && !isContainerized {
+			matched = false
+		}
+		if rule.RequireContainerRuntime && !hasContainerRuntime {
+			matched = false
+		}
+		if rule.RequireKubernetes && !isKubernetes {
 			matched = false
 		}
 		if rule.RequireHostFDLeak && !hasFDLeak {

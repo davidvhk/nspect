@@ -217,8 +217,9 @@ func GetDefaultCVEDatabase() *CVEDatabase {
 						"https://www.benthamsgaze.org/2020/12/01/cve-2020-15257-containerd-shim-api-exposure/",
 					},
 				},
-				RequireSharedNetNS:   true,
-				RequireContainerized: true,
+				RequireSharedNetNS:      true,
+				RequireContainerized:    true,
+				RequireContainerRuntime: true,
 			},
 			{
 				CVE: CVEFinding{
@@ -273,6 +274,7 @@ func GetDefaultCVEDatabase() *CVEDatabase {
 					},
 				},
 				RequireHostRootEUID: true,
+				RequireKubernetes:   true,
 			},
 			{
 				CVE: CVEFinding{
@@ -290,6 +292,7 @@ func GetDefaultCVEDatabase() *CVEDatabase {
 					},
 				},
 				RequireHostRootEUID: true,
+				RequireKubernetes:   true,
 			},
 			{
 				CVE: CVEFinding{
@@ -307,6 +310,7 @@ func GetDefaultCVEDatabase() *CVEDatabase {
 					},
 				},
 				RequireSharedNetNS: true,
+				RequireKubernetes:  true,
 			},
 
 			// --- KERNEL PRIVILEGE ESCALATION ---
