@@ -26,6 +26,10 @@ func printUsage() {
 	fmt.Printf("  -s, --server            Start lightweight web console for live auditing\n")
 	fmt.Printf("      --host <host>       Host address for the web console to listen on (default: 127.0.0.1)\n")
 	fmt.Printf("      --port <port>       Port for the web console to listen on (default: 8080)\n")
+	fmt.Printf("      --sync-cve          Sync local CVE vulnerability database online or update local rules file\n")
+	fmt.Printf("      --nvd-api-key <key> API key for official NIST NVD API 2.0 live synchronization\n")
+	fmt.Printf("      --nvd-keywords <list> Comma-separated search terms for NVD API 2.0 (e.g. 'podman,crio,kernel,kubernetes')\n")
+	fmt.Printf("      --nvd-since <date>  Filter NVD search by publication start date (e.g. '2020-01-01')\n")
 	fmt.Printf("  -h, --help              Show this help message\n")
 	fmt.Printf("\nCI/CD Flags:\n")
 	fmt.Printf("      --fail-score <score>  Fail if overall security score is less than this value (0-100)\n")
@@ -64,6 +68,9 @@ func main() {
 
 	var applyOverrideFlag bool
 	var syncCVEFlag bool
+	var nvdAPIKeyFlag string
+	var nvdKeywordsFlag string
+	var nvdSinceFlag string
 
 	flag.StringVar(&pidFlag, "pid", "", "Audit the specified process ID")
 	flag.StringVar(&pidFlag, "p", "", "Audit the specified process ID")
@@ -83,6 +90,9 @@ func main() {
 	flag.IntVar(&portFlag, "port", 8080, "Port for the web console to listen on")
 	flag.BoolVar(&applyOverrideFlag, "apply-override", false, "Automatically write auto-generated systemd service override.conf to disk")
 	flag.BoolVar(&syncCVEFlag, "sync-cve", false, "Sync local CVE vulnerability database online or update local rules file")
+	flag.StringVar(&nvdAPIKeyFlag, "nvd-api-key", "", "API key for NIST NVD API 2.0 live synchronization")
+	flag.StringVar(&nvdKeywordsFlag, "nvd-keywords", "", "Comma-separated list of keywords to search NVD API 2.0 (e.g. 'podman,crio,kernel,kubernetes')")
+	flag.StringVar(&nvdSinceFlag, "nvd-since", "", "Filter NVD API 2.0 search by publication start date (e.g. '2020-01-01')")
 	flag.BoolVar(&helpFlag, "help", false, "Show this help message")
 	flag.BoolVar(&helpFlag, "h", false, "Show this help message")
 
@@ -105,9 +115,9 @@ func main() {
 	}
 
 	// Handle CVE database sync
-	if syncCVEFlag {
+	if syncCVEFlag || nvdAPIKeyFlag != "" || nvdKeywordsFlag != "" || nvdSinceFlag != "" {
 		fmt.Printf("%s[+] Synchronizing local CVE vulnerability database...%s\n", auditor.Bold+auditor.Cyan, auditor.Reset)
-		if err := auditor.SyncCVEDatabase(); err != nil {
+		if err := auditor.SyncCVEDatabaseEx(nvdAPIKeyFlag, nvdKeywordsFlag, nvdSinceFlag); err != nil {
 			fmt.Fprintf(os.Stderr, "Error syncing CVE database: %v\n", err)
 			os.Exit(1)
 		}

@@ -206,7 +206,7 @@ func handleCVESync(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST method required"})
 		return
 	}
-	if err := auditor.SyncCVEDatabase(); err != nil {
+	if err := auditor.SyncCVEDatabase(""); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed syncing CVE database: %v", err)})
 		return
 	}

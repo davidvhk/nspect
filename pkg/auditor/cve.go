@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -260,6 +261,23 @@ func EvaluateCVEs(report *AuditReport) []CVEFinding {
 			matched = false
 		}
 
+		// Ensure rules without specific kernel trigger flags require exact component/process name matching
+		hasSpecificCondition := rule.RequireHostFDLeak || rule.RequireCAPSysAdmin || rule.RequireCAPBPF ||
+			rule.RequireCAPPtrace || rule.RequireCAPNetRaw || rule.RequireCAPNetAdmin ||
+			rule.RequireWritableProc || rule.RequireWritableSys || rule.RequireSharedNetNS ||
+			rule.RequireHostRootEUID || rule.RequireNoNewPrivsNo || rule.RequireUnprivUserNS ||
+			rule.RequireSUIDBinaries || rule.RequireSecretsExposed || rule.RequireSeccompDisabled ||
+			rule.RequireKubernetes || rule.RequireContainerRuntime
+
+		if !hasSpecificCondition && matched {
+			comp := strings.ToLower(rule.CVE.Component)
+			pName := strings.ToLower(report.ProcessName)
+			cmdLine := strings.ToLower(report.Cmdline)
+			if comp != "" && !strings.Contains(pName, comp) && !strings.Contains(cmdLine, comp) {
+				matched = false
+			}
+		}
+
 		if matched {
 			findings = append(findings, rule.CVE)
 		}
@@ -268,37 +286,264 @@ func EvaluateCVEs(report *AuditReport) []CVEFinding {
 	return findings
 }
 
+type NVDResponse struct {
+	Vulnerabilities []struct {
+		CVE struct {
+			ID          string `json:"id"`
+			Descriptions []struct {
+				Lang  string `json:"lang"`
+				Value string `json:"value"`
+			} `json:"descriptions"`
+			Metrics struct {
+				CvssMetricV31 []struct {
+					CvssData struct {
+						BaseScore    float64 `json:"baseScore"`
+						BaseSeverity string  `json:"baseSeverity"`
+					} `json:"cvssData"`
+				} `json:"cvssMetricV31"`
+			} `json:"metrics"`
+			References []struct {
+				URL string `json:"url"`
+			} `json:"references"`
+		} `json:"cve"`
+	} `json:"vulnerabilities"`
+}
+
+// FetchNVDDetails fetches live NIST NVD API 2.0 data for a specific CVE ID.
+func FetchNVDDetails(cveID string, apiKey string) (*CVEFinding, error) {
+	url := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=%s", cveID)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "nspect-auditor/1.0")
+	if apiKey != "" {
+		req.Header.Set("apiKey", apiKey)
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("NVD API returned HTTP %d", resp.StatusCode)
+	}
+
+	var nvdRes NVDResponse
+	if err := json.NewDecoder(resp.Body).Decode(&nvdRes); err != nil || len(nvdRes.Vulnerabilities) == 0 {
+		return nil, fmt.Errorf("no NVD vulnerability records found for %s", cveID)
+	}
+
+	vuln := nvdRes.Vulnerabilities[0].CVE
+	finding := &CVEFinding{
+		ID:  vuln.ID,
+		URL: fmt.Sprintf("https://nvd.nist.gov/vuln/detail/%s", vuln.ID),
+	}
+
+	for _, desc := range vuln.Descriptions {
+		if desc.Lang == "en" {
+			finding.Description = desc.Value
+			break
+		}
+	}
+
+	if len(vuln.Metrics.CvssMetricV31) > 0 {
+		cvss := vuln.Metrics.CvssMetricV31[0].CvssData
+		finding.CVSSScore = cvss.BaseScore
+		finding.Severity = strings.ToUpper(cvss.BaseSeverity)
+	}
+
+	var refs []string
+	for _, ref := range vuln.References {
+		if ref.URL != "" {
+			refs = append(refs, ref.URL)
+			if len(refs) >= 5 {
+				break
+			}
+		}
+	}
+	finding.References = refs
+
+	return finding, nil
+}
+
+// FetchNVDKeywordCVEs queries NIST NVD API 2.0 for live CVEs matching a container/kernel keyword and optional sinceDate.
+func FetchNVDKeywordCVEs(keyword string, apiKey string, sinceDate string) ([]CVERule, error) {
+	kwEscaped := url.QueryEscape(strings.TrimSpace(keyword))
+	apiURL := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=%s&resultsPerPage=20", kwEscaped)
+	if sinceDate != "" {
+		sinceDate = strings.TrimSpace(sinceDate)
+		if len(sinceDate) == 10 { // e.g. 2020-01-01
+			apiURL += fmt.Sprintf("&pubStartDate=%sT00:00:00.000", sinceDate)
+		} else if strings.Contains(sinceDate, "T") {
+			apiURL += fmt.Sprintf("&pubStartDate=%s", sinceDate)
+		}
+	}
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "nspect-auditor/1.0")
+	if apiKey != "" {
+		req.Header.Set("apiKey", apiKey)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("NVD API returned HTTP %d", resp.StatusCode)
+	}
+
+	var nvdRes NVDResponse
+	if err := json.NewDecoder(resp.Body).Decode(&nvdRes); err != nil {
+		return nil, err
+	}
+
+	var newRules []CVERule
+	for _, item := range nvdRes.Vulnerabilities {
+		vuln := item.CVE
+		desc := ""
+		for _, d := range vuln.Descriptions {
+			if d.Lang == "en" {
+				desc = d.Value
+				break
+			}
+		}
+
+		score := 7.5
+		sev := "HIGH"
+		if len(vuln.Metrics.CvssMetricV31) > 0 {
+			score = vuln.Metrics.CvssMetricV31[0].CvssData.BaseScore
+			sev = strings.ToUpper(vuln.Metrics.CvssMetricV31[0].CvssData.BaseSeverity)
+		}
+
+		var refs []string
+		for _, r := range vuln.References {
+			if r.URL != "" {
+				refs = append(refs, r.URL)
+				if len(refs) >= 3 {
+					break
+				}
+			}
+		}
+
+		rule := CVERule{
+			CVE: CVEFinding{
+				ID:            vuln.ID,
+				Title:         fmt.Sprintf("Live NVD Advisory: %s (%s)", vuln.ID, keyword),
+				Severity:      sev,
+				CVSSScore:     score,
+				Component:     keyword,
+				Description:   desc,
+				ExploitVector: fmt.Sprintf("Discovered via NIST NVD search for '%s'", keyword),
+				Mitigation:    "Update component to latest security patch.",
+				URL:           fmt.Sprintf("https://nvd.nist.gov/vuln/detail/%s", vuln.ID),
+				References:    refs,
+			},
+			RequireContainerized: true,
+		}
+
+		kwLower := strings.ToLower(keyword)
+		switch kwLower {
+		case "runc", "containerd", "crio", "podman":
+			rule.RequireContainerRuntime = true
+		case "ebpf":
+			rule.RequireCAPBPF = true
+		case "overlayfs":
+			rule.RequireUnprivUserNS = true
+		case "sysctl", "kernel":
+			rule.RequireCAPSysAdmin = true
+		case "kubernetes", "k8s":
+			rule.RequireKubernetes = true
+		}
+
+		newRules = append(newRules, rule)
+	}
+
+	return newRules, nil
+}
+
 // SyncCVEDatabase fetches the latest CVE definitions online and writes to ~/.nspect/cve_db.json.
-func SyncCVEDatabase() error {
+func SyncCVEDatabase(apiKey string) error {
+	return SyncCVEDatabaseEx(apiKey, "", "")
+}
+
+// SyncCVEDatabaseEx fetches live CVE definitions with custom search keywords and publication start date.
+func SyncCVEDatabaseEx(apiKey string, customKeywords string, sinceDate string) error {
 	userPath := GetUserDBPath()
 	dir := filepath.Dir(userPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed creating directory %s: %w", dir, err)
 	}
 
-	// Try fetching live feed from nspect official release feed
-	feedURL := "https://raw.githubusercontent.com/davidvhk/nspect/main/cve_db.json"
-	client := &http.Client{Timeout: 10 * time.Second}
+	db := GetDefaultCVEDatabase()
+
+	// Try fetching live feed from custom feed URL or nspect official repository
+	feedURL := os.Getenv("NSPECT_CVE_FEED_URL")
+	if feedURL == "" {
+		feedURL = "https://raw.githubusercontent.com/davidvhk/nspect/main/cve_db.json"
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
 
 	resp, err := client.Get(feedURL)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		// Fallback to generating fresh file from embedded rules
-		db := GetDefaultCVEDatabase()
-		db.LastUpdated = time.Now().Format("2006-01-02 15:04:05 UTC")
-		data, err := json.MarshalIndent(db, "", "  ")
-		if err != nil {
-			return err
+	if err == nil && resp.StatusCode == http.StatusOK {
+		var remoteDB CVEDatabase
+		if json.NewDecoder(resp.Body).Decode(&remoteDB) == nil && len(remoteDB.Rules) > 0 {
+			db = &remoteDB
 		}
-		return os.WriteFile(userPath, data, 0600)
+		resp.Body.Close()
 	}
-	defer resp.Body.Close()
 
-	var db CVEDatabase
-	if err := json.NewDecoder(resp.Body).Decode(&db); err != nil || len(db.Rules) == 0 {
-		db := GetDefaultCVEDatabase()
-		db.LastUpdated = time.Now().Format("2006-01-02 15:04:05 UTC")
-		data, _ := json.MarshalIndent(db, "", "  ")
-		return os.WriteFile(userPath, data, 0600)
+	if apiKey == "" {
+		apiKey = os.Getenv("NVD_API_KEY")
+	}
+
+	// Query NIST NVD API 2.0 for live container/kernel CVE discovery
+	existingIDs := make(map[string]bool)
+	for _, r := range db.Rules {
+		existingIDs[r.CVE.ID] = true
+	}
+
+	keywords := []string{"runc", "containerd", "buildkit", "overlayfs", "ebpf"}
+	if customKeywords != "" {
+		userList := strings.Split(customKeywords, ",")
+		var cleaned []string
+		for _, k := range userList {
+			k = strings.TrimSpace(k)
+			if k != "" {
+				cleaned = append(cleaned, k)
+			}
+		}
+		if len(cleaned) > 0 {
+			keywords = cleaned
+		}
+	}
+
+	for _, kw := range keywords {
+		dateMsg := ""
+		if sinceDate != "" {
+			dateMsg = fmt.Sprintf(" (published since %s)", sinceDate)
+		}
+		fmt.Printf("    - Querying NIST NVD API 2.0 for '%s'%s...\n", kw, dateMsg)
+		fetched, err := FetchNVDKeywordCVEs(kw, apiKey, sinceDate)
+		if err == nil && len(fetched) > 0 {
+			for _, newRule := range fetched {
+				if !existingIDs[newRule.CVE.ID] {
+					existingIDs[newRule.CVE.ID] = true
+					db.Rules = append(db.Rules, newRule)
+				}
+			}
+		}
+		time.Sleep(600 * time.Millisecond) // Respect NVD API rate limits
 	}
 
 	db.LastUpdated = time.Now().Format("2006-01-02 15:04:05 UTC")

@@ -164,6 +164,35 @@ You can start a lightweight web server that serves an interactive web console. T
 
 Once running, navigate to `http://localhost:8080` (or your host IP) in your browser.
 
+### 8. CVE Vulnerability Engine & Live NIST NVD Sync
+
+`nspect` includes a condition-based CVE vulnerability engine. Unlike static vulnerability scanners (e.g. Trivy, Grype) that perform string matching on package version strings, **`nspect` evaluates live Linux kernel states** (capabilities, namespace isolation, `NoNewPrivileges`, leaked host FDs, writable `/proc`/`/sys`, and process tree ancestors) to determine if all prerequisite conditions to exploit a specific CVE are actively present.
+
+> 📖 **Detailed Architecture & Prerequisite Matrix:** See [CVE_ENGINE.md](CVE_ENGINE.md) for full technical documentation on the runtime evaluation matrix versus static package scanners.
+
+#### Live NIST NVD API 2.0 Synchronization & Search Options:
+Synchronize local vulnerability rules directly with live official feeds (including NIST NVD API 2.0) using custom keywords, publication date filters, or API keys:
+
+```bash
+# 1. Basic sync using default embedded/remote feed:
+./nspect --sync-cve
+
+# 2. Live sync directly from NIST NVD API 2.0 using your NVD API key parameter:
+./nspect --sync-cve --nvd-api-key "b7fc337d-0e15-4be6-9914-b2c948ab3f9c"
+
+# 3. Discover CVEs for custom component keywords (e.g. podman, cri-o, kubernetes, sysctl, seccomp):
+./nspect --sync-cve --nvd-api-key "<KEY>" --nvd-keywords "podman,crio,kubernetes,sysctl,seccomp"
+
+# 4. Filter NVD search by publication date (e.g. only advisories published since 2020-01-01):
+./nspect --sync-cve --nvd-api-key "<KEY>" --nvd-since "2020-01-01"
+
+# 5. Supply your NVD API key via environment variable:
+export NVD_API_KEY="b7fc337d-0e15-4be6-9914-b2c948ab3f9c"
+./nspect --sync-cve --nvd-keywords "podman,crio,kernel"
+```
+
+> **Database Storage Path:** Synced vulnerability rules are saved to `~/.nspect/cve_db.json`. In air-gapped or offline environments, `nspect` falls back seamlessly to its embedded zero-dependency dataset.
+
 #### Console Screenshots & Dashboard Views:
 
 ##### 🌐 Namespace Isolation Audit
