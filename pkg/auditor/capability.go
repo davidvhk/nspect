@@ -195,11 +195,16 @@ func ParseCapabilityMask(maskHex string) ([]string, error) {
 }
 
 // AuditCapabilities reads and audits capabilities of a given PID from /proc/[pid]/status.
-func AuditCapabilities(pid int) (*CapabilityAuditResult, error) {
+func AuditCapabilities(pid int, fsOpts ...*FilesystemAuditResult) (*CapabilityAuditResult, error) {
 	statusPath := util.ProcPath(pid, "status")
 	kv, err := util.ParseKeyValuePair(statusPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse process status: %w", err)
+	}
+
+	var fsResult *FilesystemAuditResult
+	if len(fsOpts) > 0 && fsOpts[0] != nil {
+		fsResult = fsOpts[0]
 	}
 
 	capKeys := []string{"CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"}
@@ -245,6 +250,7 @@ func AuditCapabilities(pid int) (*CapabilityAuditResult, error) {
 	seen := make(map[string]bool)
 
 	isUnprivileged := CheckUnprivilegedUserNS(pid) || CheckUnprivilegedUserNS(1)
+	isDistroless := fsResult != nil && (fsResult.IsDistroless || fsResult.IsChiselled || !fsResult.HasShell)
 
 	// If the process is running as root, we audit both Effective and Bounding capabilities,
 	// since root processes can easily activate capabilities in their bounding set.
@@ -275,6 +281,18 @@ func AuditCapabilities(pid int) (*CapabilityAuditResult, error) {
 				case "Medium":
 					risk.RiskLevel = "Low"
 					risk.Description = "[Sandboxed by User Namespace] " + risk.Description
+				}
+			} else if isDistroless && fsResult != nil && fsResult.Tooling != nil {
+				// Correlate capability with absent tooling on Distroless / Rock workloads
+				if capName == "CAP_SYS_CHROOT" && !fsResult.Tooling.HasTool("chroot") {
+					risk.RiskLevel = "Low"
+					risk.Description = "[Neutralized at Rest: chroot binary absent from rootfs] " + risk.Description
+				} else if capName == "CAP_MKNOD" && !fsResult.Tooling.HasTool("mknod") {
+					risk.RiskLevel = "Medium"
+					risk.Description = "[Constrained at Rest: mknod binary absent from rootfs] " + risk.Description
+				} else if capName == "CAP_NET_RAW" && !fsResult.Tooling.HasTool("nmap") && !fsResult.Tooling.HasTool("tcpdump") && !fsResult.Tooling.HasTool("nc") {
+					risk.RiskLevel = "Low"
+					risk.Description = "[Constrained at Rest: network scanning tools absent] " + risk.Description
 				}
 			}
 

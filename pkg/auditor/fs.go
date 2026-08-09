@@ -16,11 +16,45 @@ type FilesystemRisk struct {
 	Description string `json:"description"`
 }
 
+// ToolingInventory categorizes discovered binaries inside the container rootfs.
+type ToolingInventory struct {
+	TotalBinaries     int      `json:"total_binaries"`
+	InstalledBinaries []string `json:"installed_binaries"`
+	Shells            []string `json:"shells"`
+	Downloaders       []string `json:"downloaders"`
+	AdminTools        []string `json:"admin_tools"`
+	Interpreters      []string `json:"interpreters"`
+	Compilers         []string `json:"compilers"`
+	PackageManagers   []string `json:"package_managers"`
+}
+
+// HasTool checks if a binary exists in the container filesystem.
+func (t *ToolingInventory) HasTool(name string) bool {
+	if t == nil {
+		return false
+	}
+	nameLower := strings.ToLower(name)
+	for _, b := range t.InstalledBinaries {
+		if strings.ToLower(b) == nameLower {
+			return true
+		}
+	}
+	return false
+}
+
 // FilesystemAuditResult represents the results of filesystem checks.
 type FilesystemAuditResult struct {
-	Risks           []FilesystemRisk `json:"risks"`
-	Recommendations []string         `json:"recommendations"`
-	Score           int              `json:"score"` // 0 to 100
+	IsAccessible     bool              `json:"is_accessible"`
+	SUIDCount        int               `json:"suid_count"`
+	IsDistroless     bool              `json:"is_distroless"`
+	IsChiselled      bool              `json:"is_chiselled"`
+	HasShell         bool              `json:"has_shell"`
+	HasPkgManager    bool              `json:"has_pkg_manager"`
+	ImageFlavor      string            `json:"image_flavor"` // "Ubuntu Rock (Pebble Managed)", "Chiselled / Distroless Minimal", "Standard Linux Distribution"
+	Tooling          *ToolingInventory `json:"tooling,omitempty"`
+	Risks           []FilesystemRisk   `json:"risks"`
+	Recommendations []string           `json:"recommendations"`
+	Score           int                `json:"score"` // 0 to 100
 }
 
 // AuditFilesystem scans the target container's internal filesystem via /proc/[pid]/root.
@@ -29,9 +63,33 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 	
 	// Verify we can access the root path of the container
 	if _, err := os.Stat(rootPath); err != nil {
+		procName, _ := util.GetProcessName(pid)
+		isPebble := strings.Contains(strings.ToLower(procName), "pebble")
+		flavor := "Standard Linux Distribution"
+		if isPebble {
+			flavor = "Ubuntu Rock (Pebble Managed)"
+		}
+
 		return &FilesystemAuditResult{
+			IsAccessible:    false,
+			SUIDCount:       0,
+			IsDistroless:    isPebble,
+			IsChiselled:     isPebble,
+			HasShell:        !isPebble,
+			HasPkgManager:   !isPebble,
+			ImageFlavor:     flavor,
+			Tooling: &ToolingInventory{
+				TotalBinaries:     0,
+				InstalledBinaries: []string{},
+				Shells:            []string{},
+				Downloaders:       []string{},
+				AdminTools:        []string{},
+				Interpreters:      []string{},
+				Compilers:         []string{},
+				PackageManagers:   []string{},
+			},
 			Risks:           nil,
-			Recommendations: []string{"Filesystem audit skipped: target container root filesystem is not accessible (insufficient permissions or target exited)."},
+			Recommendations: []string{fmt.Sprintf("Filesystem audit skipped: run 'sudo ./nspect --pid %d' to inspect container overlay filesystem.", pid)},
 			Score:           100,
 		}, nil
 	}
@@ -40,7 +98,7 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 	var recs []string
 	scoreReduction := 0
 
-	// 1. SUID/SGID Binary Scanner in common directories
+	// 1. SUID/SGID Binary Scanner & Tooling Inventory in common directories
 	binaryDirs := []string{
 		"/bin",
 		"/sbin",
@@ -50,22 +108,35 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 		"/usr/local/sbin",
 	}
 
+	knownShells := map[string]bool{"sh": true, "bash": true, "ash": true, "dash": true, "zsh": true, "ksh": true, "csh": true, "tcsh": true}
+	knownDownloaders := map[string]bool{"curl": true, "wget": true, "nc": true, "netcat": true, "socat": true, "ncat": true, "tftp": true, "ftp": true, "scp": true, "sftp": true}
+	knownAdmin := map[string]bool{"sudo": true, "su": true, "chroot": true, "mknod": true, "mount": true, "umount": true, "pivot_root": true, "unshare": true, "nsenter": true, "insmod": true, "modprobe": true, "rmmod": true, "lsmod": true, "iptables": true, "nft": true, "sysctl": true, "gpasswd": true, "newgrp": true, "passwd": true, "useradd": true, "usermod": true, "userdel": true, "groupadd": true, "kexec": true, "dmesg": true, "ptrace": true, "gdb": true, "strace": true, "tcpdump": true}
+	knownInterpreters := map[string]bool{"python": true, "python2": true, "python3": true, "perl": true, "ruby": true, "php": true, "lua": true, "node": true, "nodejs": true, "deno": true, "bun": true}
+	knownCompilers := map[string]bool{"gcc": true, "g++": true, "clang": true, "clang++": true, "make": true, "as": true, "ld": true, "cc": true, "rustc": true, "go": true}
+	knownPkgMgrs := map[string]bool{"apt": true, "apt-get": true, "dpkg": true, "apk": true, "rpm": true, "yum": true, "dnf": true, "pacman": true, "zypper": true, "microdnf": true}
+
+	var allBinaries []string
+	var shells []string
+	var downloaders []string
+	var adminTools []string
+	var interpreters []string
+	var compilers []string
+	var pkgManagers []string
+	seenBinary := make(map[string]bool)
+
 	foundSUID := 0
 	for _, dir := range binaryDirs {
 		targetDir := filepath.Join(rootPath, dir)
-		// Check if directory exists
 		if _, err := os.Stat(targetDir); err != nil {
 			continue
 		}
 
-		// Read the directory contents
 		entries, err := os.ReadDir(targetDir)
 		if err != nil {
 			continue
 		}
 
 		for _, entry := range entries {
-			// Skip directories
 			if entry.IsDir() {
 				continue
 			}
@@ -76,7 +147,31 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 				continue
 			}
 
-			// We want to skip symlinks
+			nameLower := strings.ToLower(entry.Name())
+			if !seenBinary[nameLower] {
+				seenBinary[nameLower] = true
+				allBinaries = append(allBinaries, entry.Name())
+				if knownShells[nameLower] {
+					shells = append(shells, entry.Name())
+				}
+				if knownDownloaders[nameLower] {
+					downloaders = append(downloaders, entry.Name())
+				}
+				if knownAdmin[nameLower] {
+					adminTools = append(adminTools, entry.Name())
+				}
+				if knownInterpreters[nameLower] {
+					interpreters = append(interpreters, entry.Name())
+				}
+				if knownCompilers[nameLower] {
+					compilers = append(compilers, entry.Name())
+				}
+				if knownPkgMgrs[nameLower] {
+					pkgManagers = append(pkgManagers, entry.Name())
+				}
+			}
+
+			// Skip symlinks for SUID check
 			if info.Mode()&os.ModeSymlink != 0 {
 				continue
 			}
@@ -85,15 +180,10 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 			mode := info.Mode()
 			if mode&os.ModeSetuid != 0 || mode&os.ModeSetgid != 0 {
 				containerPath := filepath.Join(dir, entry.Name())
-				
-				// Standard SUID binaries like passwd, sudo, gpasswd, newgrp etc. are common,
-				// but in a minimal container they shouldn't even be present.
 				riskLvl := "Medium"
 				desc := fmt.Sprintf("SUID/SGID binary found inside container: %s. If an attacker gains code execution as a non-root user inside the container, they can exploit vulnerability in this binary to escalate to container root.", containerPath)
 				
-				// Highlight highly dangerous ones if they aren't standard or if they are known risk factors
-				lowerName := strings.ToLower(entry.Name())
-				if lowerName == "sudo" || lowerName == "su" || lowerName == "chsh" || lowerName == "chfn" {
+				if nameLower == "sudo" || nameLower == "su" || nameLower == "chsh" || nameLower == "chfn" {
 					riskLvl = "High"
 				}
 
@@ -119,7 +209,7 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 	sensitiveFiles := []struct {
 		Path        string
 		CheckWrite  bool
-		CheckOthers bool // Check if readable/writable by others
+		CheckOthers bool
 		Description string
 	}{
 		{"/etc/shadow", false, true, "Shadow file is readable or writable by non-root users inside the container namespace."},
@@ -139,12 +229,12 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 		isVulnerable := false
 		var vulnDesc []string
 
-		if sf.CheckWrite && (mode&0002 != 0) { // World-writable
+		if sf.CheckWrite && (mode&0002 != 0) {
 			isVulnerable = true
 			vulnDesc = append(vulnDesc, "world-writable (mode allows any user to modify)")
 		}
 
-		if sf.CheckOthers && (mode&0007 != 0) { // Readable/writable/executable by others
+		if sf.CheckOthers && (mode&0007 != 0) {
 			isVulnerable = true
 			vulnDesc = append(vulnDesc, fmt.Sprintf("insecure permissions (mode: %04o, should be restricted to root only)", mode.Perm()))
 		}
@@ -160,7 +250,7 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 		}
 	}
 
-	// 3. Scan for common configuration files with secrets (just look for .env, credentials files in root/app)
+	// 3. Scan for common configuration files with secrets
 	secretFilesPattern := []string{
 		"/.env",
 		"/app/.env",
@@ -170,7 +260,6 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 	for _, spf := range secretFilesPattern {
 		targetFile := filepath.Join(rootPath, spf)
 		if _, err := os.Stat(targetFile); err == nil {
-			// Found an env file in the container
 			risks = append(risks, FilesystemRisk{
 				Path:        spf,
 				RiskLevel:   "High",
@@ -184,14 +273,76 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 		scoreReduction += 15
 	}
 
+	// 4. Distroless / Rock / Minimal Image Detection Heuristics
+	hasShell := len(shells) > 0
+	hasPkgMgr := len(pkgManagers) > 0
+	hasPebble := seenBinary["pebble"]
+
+	if !hasPebble {
+		for _, pb := range []string{"/charm/bin/pebble", "/usr/bin/pebble", "/bin/pebble", "/var/lib/pebble"} {
+			if _, err := os.Stat(filepath.Join(rootPath, pb)); err == nil {
+				hasPebble = true
+				break
+			}
+		}
+	}
+
+	// Check /etc/os-release for Distroless / Chiselled / Rock signatures
+	isChiselled := hasPebble
+	isDistroless := !hasShell && !hasPkgMgr
+
+	if osRelData, err := os.ReadFile(filepath.Join(rootPath, "/etc/os-release")); err == nil {
+		contentLower := strings.ToLower(string(osRelData))
+		if strings.Contains(contentLower, "chisel") || strings.Contains(contentLower, "rock") {
+			isChiselled = true
+		}
+		if strings.Contains(contentLower, "distroless") {
+			isDistroless = true
+		}
+	}
+
+	if !hasShell && !hasPkgMgr {
+		isChiselled = true
+		isDistroless = true
+	}
+
+	flavor := "Standard Linux Distribution"
+	if hasPebble {
+		flavor = "Ubuntu Rock (Pebble Managed)"
+	} else if isChiselled {
+		flavor = "Ubuntu Chiselled / Minimal Image"
+	} else if isDistroless {
+		flavor = "Distroless Minimal Image"
+	}
+
 	finalScore := 100 - scoreReduction
 	if finalScore < 0 {
 		finalScore = 0
 	}
 
+	tooling := &ToolingInventory{
+		TotalBinaries:     len(allBinaries),
+		InstalledBinaries: allBinaries,
+		Shells:            shells,
+		Downloaders:       downloaders,
+		AdminTools:        adminTools,
+		Interpreters:      interpreters,
+		Compilers:         compilers,
+		PackageManagers:   pkgManagers,
+	}
+
 	return &FilesystemAuditResult{
+		IsAccessible:     true,
+		SUIDCount:        foundSUID,
+		IsDistroless:     isDistroless,
+		IsChiselled:      isChiselled,
+		HasShell:         hasShell,
+		HasPkgManager:    hasPkgMgr,
+		ImageFlavor:      flavor,
+		Tooling:          tooling,
 		Risks:           risks,
 		Recommendations: recs,
 		Score:           finalScore,
 	}, nil
 }
+

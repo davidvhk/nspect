@@ -29,12 +29,23 @@ type AuditReport struct {
 
 // GenerateReport runs all audits on the target PID.
 func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditReport, error) {
+	// 1. Audit filesystem first to provide context (SUID counts, Distroless/Rock detection)
+	fsResult, err := AuditFilesystem(pid)
+	if err != nil {
+		fsResult = &FilesystemAuditResult{
+			SUIDCount:       0,
+			ImageFlavor:     "Standard Linux Distribution",
+			Score:           100,
+			Recommendations: []string{"Filesystem audit skipped: container rootfs not accessible."},
+		}
+	}
+
 	nsResult, err := AuditNamespaces(pid)
 	if err != nil {
 		return nil, fmt.Errorf("failed auditing namespaces: %w", err)
 	}
 
-	capResult, err := AuditCapabilities(pid)
+	capResult, err := AuditCapabilities(pid, fsResult)
 	if err != nil {
 		return nil, fmt.Errorf("failed auditing capabilities: %w", err)
 	}
@@ -44,7 +55,7 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		return nil, fmt.Errorf("failed auditing mounts: %w", err)
 	}
 
-	secResult, err := AuditSecurity(pid)
+	secResult, err := AuditSecurity(pid, fsResult)
 	if err != nil {
 		return nil, fmt.Errorf("failed auditing security: %w", err)
 	}
@@ -62,11 +73,6 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 	fdResult, err := AuditFD(pid)
 	if err != nil {
 		fdResult = &FDAuditResult{Score: 100}
-	}
-
-	fsResult, err := AuditFilesystem(pid)
-	if err != nil {
-		fsResult = &FilesystemAuditResult{Score: 100}
 	}
 
 	sysdResult, err := AuditSystemd(pid, name)
@@ -266,6 +272,22 @@ func (r *AuditReport) RenderCLI() string {
 			if actStr == "" {
 				actStr = sc.Status
 			}
+
+			// Correlate with Tooling Inventory (Distroless / Rock awareness)
+			if sc.Status == "Allowed" && r.Filesystem != nil && r.Filesystem.Tooling != nil && r.Filesystem.IsAccessible {
+				// Map syscall names to corresponding CLI tools
+				toolMap := map[string]string{
+					"mount": "mount", "pivot_root": "pivot_root", "chroot": "chroot", "unshare": "unshare",
+					"kexec_load": "kexec", "init_module": "insmod", "finit_module": "insmod", "ptrace": "gdb",
+					"bpf": "bpftool", "reboot": "reboot", "syslog": "dmesg",
+				}
+				if toolName, ok := toolMap[sc.Name]; ok {
+					if !r.Filesystem.Tooling.HasTool(toolName) {
+						actStr += fmt.Sprintf(" %s(Binary absent on rootfs)%s", Cyan, Reset)
+					}
+				}
+			}
+
 			sb.WriteString(fmt.Sprintf("      - %-18s (nr %3d): %s%-22s%s [%s] | %s\n", sc.Name, sc.Syscall, scColor, sc.Status, Reset, actStr, sc.Risk))
 		}
 	}
@@ -273,6 +295,8 @@ func (r *AuditReport) RenderCLI() string {
 	nnpStatus := fmt.Sprintf("%sNo%s", Red, Reset)
 	if r.Security.NoNewPrivs {
 		nnpStatus = fmt.Sprintf("%sYes%s", Green, Reset)
+	} else if r.Filesystem != nil && r.Filesystem.SUIDCount == 0 {
+		nnpStatus = fmt.Sprintf("%sNo [Neutralized: 0 SUID binaries on rootfs / Distroless]%s", Cyan, Reset)
 	}
 	sb.WriteString(fmt.Sprintf("  - NoNewPrivs   : %s\n", nnpStatus))
 	sb.WriteString(fmt.Sprintf("  - LSM Status   : %s\n", r.Security.LSMProfile))
@@ -285,6 +309,10 @@ func (r *AuditReport) RenderCLI() string {
 	}
 	if r.Security.InitProcessName != "" {
 		initColor := Green
+		initExtra := ""
+		if r.Security.InitProcessName == "pebble" {
+			initExtra = " (Canonical Pebble Supervisor)"
+		}
 		isPidIsolated := false
 		if r.Namespaces != nil {
 			for _, ns := range r.Namespaces.Namespaces {
@@ -296,13 +324,13 @@ func (r *AuditReport) RenderCLI() string {
 		}
 		if isPidIsolated {
 			standardInits := map[string]bool{
-				"systemd": true, "init": true, "tini": true, "dumb-init": true, "s6-svscan": true, "runit": true, "pause": true,
+				"systemd": true, "init": true, "tini": true, "dumb-init": true, "pebble": true, "s6-svscan": true, "runit": true, "pause": true,
 			}
 			if !standardInits[r.Security.InitProcessName] {
 				initColor = Yellow
 			}
 		}
-		sb.WriteString(fmt.Sprintf("  - PID 1 Name   : %s%s%s\n", initColor, r.Security.InitProcessName, Reset))
+		sb.WriteString(fmt.Sprintf("  - PID 1 Name   : %s%s%s%s\n", initColor, r.Security.InitProcessName, initExtra, Reset))
 	}
 	if r.Security.CgroupMemoryLimit != "" && r.Security.CgroupMemoryLimit != "none" {
 		memColor := Green
@@ -442,19 +470,63 @@ func (r *AuditReport) RenderCLI() string {
 
 	// 8. Filesystem Audit
 	sb.WriteString(fmt.Sprintf("%s[8] CONTAINER FILESYSTEM AUDIT%s (Score: %d/100)\n", Bold+Underline, Reset, r.Filesystem.Score))
-	if len(r.Filesystem.Risks) > 0 {
-		sb.WriteString(fmt.Sprintf("  %s%sFilesystem Risks Discovered:%s\n", Bold, Red, Reset))
-		for _, fr := range r.Filesystem.Risks {
-			color := Red
-			if fr.RiskLevel == "Medium" {
-				color = Yellow
-			} else if fr.RiskLevel == "Low" {
-				color = Gray
-			}
-			sb.WriteString(fmt.Sprintf("    * %s%s%s (%s): %s\n", Bold, color, fr.Path, fr.RiskLevel, Reset+fr.Description))
-		}
+	if r.Filesystem.ImageFlavor != "" && r.Filesystem.ImageFlavor != "Standard Linux Distribution" {
+		sb.WriteString(fmt.Sprintf("  - Image Flavor     : %s%s%s\n", Cyan+Bold, r.Filesystem.ImageFlavor, Reset))
+	}
+	if !r.Filesystem.IsAccessible {
+		sb.WriteString(fmt.Sprintf("  - Rootfs Access    : %sRestricted%s (Run 'sudo ./nspect --pid %d' to perform deep filesystem inspection)\n", Yellow, Reset, r.PID))
 	} else {
-		sb.WriteString("  - No sensitive SUID/SGID files, insecure permissions, or environment secrets found in filesystem.\n")
+		if r.Filesystem.Tooling != nil {
+			binSummary := fmt.Sprintf("%d total binaries", r.Filesystem.Tooling.TotalBinaries)
+			if len(r.Filesystem.Tooling.InstalledBinaries) > 0 && len(r.Filesystem.Tooling.InstalledBinaries) <= 6 {
+				binSummary += fmt.Sprintf(" (%s)", strings.Join(r.Filesystem.Tooling.InstalledBinaries, ", "))
+			}
+			sb.WriteString(fmt.Sprintf("  - Installed Tools  : %s\n", binSummary))
+
+			if len(r.Filesystem.Tooling.Shells) == 0 {
+				sb.WriteString(fmt.Sprintf("  - Shell Access     : %sNone (0 found — /bin/sh and /bin/bash absent)%s\n", Green, Reset))
+			} else {
+				sb.WriteString(fmt.Sprintf("  - Shell Access     : %sActive (%s)%s\n", Yellow, strings.Join(r.Filesystem.Tooling.Shells, ", "), Reset))
+			}
+
+			if len(r.Filesystem.Tooling.PackageManagers) == 0 {
+				sb.WriteString(fmt.Sprintf("  - Package Managers : %sNone (0 found — apt/dpkg/apk absent)%s\n", Green, Reset))
+			} else {
+				sb.WriteString(fmt.Sprintf("  - Package Managers : %sPresent (%s)%s\n", Yellow, strings.Join(r.Filesystem.Tooling.PackageManagers, ", "), Reset))
+			}
+
+			if len(r.Filesystem.Tooling.Downloaders) == 0 {
+				sb.WriteString(fmt.Sprintf("  - Network Tools    : %sNone (0 found — curl/wget/nc absent)%s\n", Green, Reset))
+			} else {
+				sb.WriteString(fmt.Sprintf("  - Network Tools    : %sPresent (%s)%s\n", Yellow, strings.Join(r.Filesystem.Tooling.Downloaders, ", "), Reset))
+			}
+
+			if len(r.Filesystem.Tooling.AdminTools) == 0 {
+				sb.WriteString(fmt.Sprintf("  - Admin Utilities  : %sNone (0 found — chroot/mknod/mount/insmod absent)%s\n", Green, Reset))
+			} else {
+				sb.WriteString(fmt.Sprintf("  - Admin Utilities  : %sPresent (%s)%s\n", Yellow, strings.Join(r.Filesystem.Tooling.AdminTools, ", "), Reset))
+			}
+
+			if len(r.Filesystem.Tooling.Interpreters)+len(r.Filesystem.Tooling.Compilers) == 0 {
+				sb.WriteString(fmt.Sprintf("  - Script/Compilers : %sNone (0 found — python/perl/gcc absent)%s\n", Green, Reset))
+			}
+		}
+
+		sb.WriteString(fmt.Sprintf("  - SUID Binaries    : %d found\n", r.Filesystem.SUIDCount))
+		if len(r.Filesystem.Risks) > 0 {
+			sb.WriteString(fmt.Sprintf("  %s%sFilesystem Risks Discovered:%s\n", Bold, Red, Reset))
+			for _, fr := range r.Filesystem.Risks {
+				color := Red
+				if fr.RiskLevel == "Medium" {
+					color = Yellow
+				} else if fr.RiskLevel == "Low" {
+					color = Gray
+				}
+				sb.WriteString(fmt.Sprintf("    * %s%s%s (%s): %s\n", Bold, color, fr.Path, fr.RiskLevel, Reset+fr.Description))
+			}
+		} else {
+			sb.WriteString("  - No sensitive SUID/SGID files, insecure permissions, or environment secrets found in filesystem.\n")
+		}
 	}
 	sb.WriteString("\n")
 

@@ -33,11 +33,16 @@ type SecurityAuditResult struct {
 }
 
 // AuditSecurity checks process level sandboxing and credential settings.
-func AuditSecurity(pid int) (*SecurityAuditResult, error) {
+func AuditSecurity(pid int, fsOpts ...*FilesystemAuditResult) (*SecurityAuditResult, error) {
 	statusPath := util.ProcPath(pid, "status")
 	kv, err := util.ParseKeyValuePair(statusPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse process status: %w", err)
+	}
+
+	var fsResult *FilesystemAuditResult
+	if len(fsOpts) > 0 && fsOpts[0] != nil {
+		fsResult = fsOpts[0]
 	}
 
 	var risks []string
@@ -88,13 +93,10 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 					maxMapRange = length
 				}
 
-				// If UID 0 in container maps to host UID 0 (usually indicated by hostUID "0" and length "4294967295" or similar)
+				// If UID 0 in container maps to non-zero host UID
 				if containerUID == "0" && hostUID != "0" {
 					isRootless = true
 				}
-				
-				// A common Docker/rootless setup maps UID 0 to a non-zero host UID
-				// e.g. 0 100000 65536
 			}
 		}
 	}
@@ -116,7 +118,7 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 		}
 	}
 
-	// 3. NoNewPrivs Audit
+	// 3. NoNewPrivs Audit (Distroless / Rock Context Aware)
 	noNewPrivs := false
 	noNewPrivsVal, hasNoNewPrivs := kv["NoNewPrivs"]
 	if hasNoNewPrivs {
@@ -126,13 +128,18 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 	}
 
 	if !noNewPrivs {
-		risks = append(risks, "NoNewPrivs flag is not set. Subprocesses can gain new privileges via SUID binaries or file capabilities.")
-		recs = append(recs, "Set 'NoNewPrivileges=true' in systemd or '--security-opt=no-new-privileges' in Docker to prevent privilege escalation.")
-		scoreReduction += 15
+		if fsResult != nil && fsResult.SUIDCount == 0 {
+			// PASS / INFO: No SUID binaries in container rootfs means escalation is neutralized at rest
+			recs = append(recs, "NoNewPrivileges is disabled, but no SUID/SGID binaries were detected in the filesystem image. Escalation vector neutralized at rest (Distroless/Chiselled workload).")
+		} else {
+			risks = append(risks, "NoNewPrivs flag is not set. Subprocesses can gain new privileges via SUID binaries or file capabilities.")
+			recs = append(recs, "Set 'NoNewPrivileges=true' in systemd or '--security-opt=no-new-privileges' in Docker to prevent privilege escalation.")
+			scoreReduction += 15
+		}
 	}
 
 	// 4. Seccomp Deep Audit
-	seccompDetails := AuditSeccomp(pid, kv, noNewPrivs)
+	seccompDetails := AuditSeccomp(pid, kv, noNewPrivs, fsResult)
 	seccompMode := 0
 	if seccompDetails != nil {
 		seccompMode = seccompDetails.Mode
@@ -186,11 +193,11 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 	}
 	if isPidIsolated && initProcName != "" && initProcName != "unknown" {
 		standardInits := map[string]bool{
-			"systemd": true, "init": true, "tini": true, "dumb-init": true, "s6-svscan": true, "runit": true, "pause": true,
+			"systemd": true, "init": true, "tini": true, "dumb-init": true, "pebble": true, "s6-svscan": true, "runit": true, "pause": true,
 		}
 		if !standardInits[initProcName] {
 			risks = append(risks, fmt.Sprintf("PID 1 in isolated process namespace is a non-standard init process (%s). This might lead to zombie process accumulation.", initProcName))
-			recs = append(recs, "Use a lightweight init system like tini or dumb-init as the container/sandbox entrypoint to reap zombie processes.")
+			recs = append(recs, "Use a lightweight init system like tini, dumb-init, or pebble as the container/sandbox entrypoint to reap zombie processes.")
 			scoreReduction += 10
 		}
 	}
@@ -236,8 +243,10 @@ func AuditSecurity(pid int) (*SecurityAuditResult, error) {
 		risks = append(risks, "CPU SMT (Hyper-Threading) is active on the host. In multi-tenant environments, ensure CPU Core Scheduling (PR_SCHED_CORE) is enforced by the orchestrator to mitigate side-channel leaks (e.g. Spectre, MDS).")
 	}
 
-	// 10. GID Map Privilege checks
-	checkGIDMapPrivilege(pid, &risks, &recs, &scoreReduction)
+	// 10. GID Map Privilege checks (only relevant when user namespaces are remapped)
+	if isRootless {
+		checkGIDMapPrivilege(pid, &risks, &recs, &scoreReduction)
+	}
 
 	// 11. Kernel Helper Writability checks
 	checkKernelHelperWritability(pid, &risks, &recs, &scoreReduction)
@@ -496,6 +505,11 @@ func checkGIDMapPrivilege(pid int, risks *[]string, recs *[]string, scoreReducti
 			containerGID, _ := strconv.Atoi(fields[0])
 			hostGID, _ := strconv.Atoi(fields[1])
 			length, _ := strconv.Atoi(fields[2])
+
+			// Skip default full host identity mappings (e.g. 0 0 4294967295)
+			if hostGID == 0 && containerGID == 0 && (length <= 0 || length >= 4294967295) {
+				continue
+			}
 			
 			// Check if any mapped host GID falls into sensitive GIDs
 			for gidVal, groupName := range sensitiveGIDs {

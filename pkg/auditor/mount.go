@@ -300,15 +300,36 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 					deductions["sys"] += 35
 				}
 			} else if m.MountPoint == "/dev" || m.FSType == "devtmpfs" {
-				if isUnprivileged {
+				safeCharDevices := map[string]bool{
+					"/dev/null": true, "/dev/zero": true, "/dev/full": true,
+					"/dev/random": true, "/dev/urandom": true, "/dev/tty": true,
+					"/dev/ptmx": true, "/dev/fuse": true,
+				}
+
+				if safeCharDevices[m.MountPoint] {
 					risks = append(risks, MountRisk{
 						MountPoint:  m.MountPoint,
 						MountSource: m.MountSource,
 						FSType:      m.FSType,
-						RiskLevel:   "Medium",
-						Description: "[Sandboxed by User Namespace] Writable /dev or devtmpfs. While normally high risk, user namespace mapping prevents the creation of new physical device nodes (CAP_MKNOD is restricted).",
+						RiskLevel:   "Info",
+						Description: fmt.Sprintf("Standard container character device node (%s) mounted from host.", m.MountPoint),
 					})
-					deductions["dev"] += 10
+				} else if isUnprivileged {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Info",
+						Description: "[Sandboxed by User Namespace] Container /dev filesystem. User namespace mapping prevents creation of raw physical device nodes.",
+					})
+				} else if lsmRestrictsWrites && m.FSType == "tmpfs" {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Info",
+						Description: fmt.Sprintf("Writable container /dev tmpfs detected. Raw device node creation and host hardware access are constrained by active LSM profile (%s).", lsmProfile),
+					})
 				} else {
 					risks = append(risks, MountRisk{
 						MountPoint:  m.MountPoint,
@@ -386,8 +407,13 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 		}
 
 		// 5. General Mount Hardening Flags on external/bind/network/tmpfs mounts
+		// Skip container-injected networking config files and Docker/runc masked /proc and /sys subpaths
+		isContainerConfig := m.MountPoint == "/etc/resolv.conf" || m.MountPoint == "/etc/hostname" || m.MountPoint == "/etc/hosts" || m.MountPoint == "/etc/timezone" || m.MountPoint == "/etc/localtime"
+		isProcOrSysSubpath := strings.HasPrefix(m.MountPoint, "/proc/") || strings.HasPrefix(m.MountPoint, "/sys/")
+
 		if isRW && m.MountPoint != "/" && !isKernelPseudoFS(m.FSType) &&
-			m.MountPoint != "/tmp" && m.MountPoint != "/dev/shm" && m.MountPoint != "/run/lock" {
+			m.MountPoint != "/tmp" && m.MountPoint != "/dev/shm" && m.MountPoint != "/run/lock" &&
+			m.MountPoint != "/dev" && !isContainerConfig && !isProcOrSysSubpath {
 			
 			if !hasOption(m.MountOptions, "nosuid") && !hasOption(m.SuperOptions, "nosuid") {
 				if isUnprivileged {
