@@ -256,13 +256,11 @@ func AuditSeccomp(pid int, kv map[string]string, noNewPrivs bool, fsOpts ...*Fil
 	}
 
 	// 3. Co-enforcement check with NoNewPrivs
-	if !noNewPrivs {
-		if fsResult != nil && fsResult.SUIDCount == 0 {
-			// In Distroless / Chiselled workloads without SUID binaries, SUID bypass is neutralized at rest
-		} else {
-			details.Risks = append(details.Risks, "Seccomp filter is active, but NoNewPrivs is disabled. Unprivileged subprocesses could attempt privilege escalation or SUID bypass.")
-			details.Recommendations = append(details.Recommendations, "Set 'NoNewPrivileges=true' to ensure child processes maintain Seccomp filter enforcement.")
-		}
+	if !noNewPrivs && !(fsResult != nil && fsResult.SUIDCount == 0) {
+		// In Distroless / Chiselled workloads without SUID binaries, SUID bypass is neutralized at rest.
+		// Only warn when SUID binaries are present or filesystem info is unavailable.
+		details.Risks = append(details.Risks, "Seccomp filter is active, but NoNewPrivs is disabled. Unprivileged subprocesses could attempt privilege escalation or SUID bypass.")
+		details.Recommendations = append(details.Recommendations, "Set 'NoNewPrivileges=true' to ensure child processes maintain Seccomp filter enforcement.")
 	}
 
 	// 4. Detailed BPF Filter Inspection via ptrace (if privileged)
