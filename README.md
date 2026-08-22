@@ -49,6 +49,7 @@ Unlike static config parsers or traditional local privilege escalation scripts (
 - **Environment Secret Scanner:** Decodes `/proc/[pid]/environ` to scan for key patterns pointing to credentials, tokens, or passwords (`*PASS*`, `*SECRET*`, `*KEY*`, `*TOKEN*`), displaying them masked to avoid output leakage.
 - **Inner-Namespace Socket Analyzer:** Directly parses `/proc/[pid]/net/tcp` and `/proc/[pid]/net/tcp6` inside target network namespaces, exposing active listening ports and connections without needing namespace-entering tools.
 - **FD Leak Detector:** Catalogues `/proc/[pid]/fd/` descriptors and alerts on inherited host directories (abusable via `openat`), raw storage blocks, or critical configuration files.
+- **Breakout Feasibility & Exploitability Matrix:** Cross-correlates active Linux capabilities, mount configurations, namespace boundaries, and internal container tooling inventory (shells, downloaders, admin utilities, rootfs writability) to determine whether discovered misconfigurations represent realistically exploitable host escape paths in practice (`Not Feasible`, `Low`, `Moderate`, `High`, `Trivial`).
 - **Automated Hardening & Remediation Generator:** Auto-generates production-ready, copy-pasteable remediation artifacts for **Systemd** (`/etc/systemd/system/*.service.d/override.conf`), **Docker CLI** (`docker run`), **Docker Compose** (`docker-compose.yml`), **Kubernetes SecurityContext** (`deployment.yaml`), and **Host Sysctl** configurations (`/etc/sysctl.d/99-nspect-hardening.conf`). Includes an automated `--apply-override` CLI flag and one-click Web Console action buttons to apply systemd service overrides directly to disk.
 - **Zero-Dependency Portability:** Compiled into a single, statically-linked binary, making it extremely easy to copy and run on target hosts during security assessments.
 
@@ -107,17 +108,33 @@ Scan the host for processes running in isolated namespaces (Docker, Podman, LXC,
 
 > **Note:** To see all isolated processes running on the host, run the command with root privileges (`sudo ./nspect --list`).
 
-### 2. Audit a Target Process
-Analyze the sandbox boundaries of a target process using its PID:
+### 2. Audit a Target Process or Self-Audit
+Analyze the sandbox boundaries of a target process using its PID, or perform a **Self-Audit** using `self` (or `0`):
 
 ```bash
+# Audit a specific process PID on the host:
 ./nspect --pid <PID>
+# Shorthand:
+./nspect -p <PID>
+
+# Self-audit the calling process or current shell context:
+./nspect --pid self
+# Shorthand:
+./nspect -p self
 ```
 
-For example, to audit your current shell context:
+#### 🔍 Container Self-Introspection (`--pid self`)
+When running `nspect` inside a container (or when auditing the container's own isolation boundaries), you do not need to look up host PID numbers. Passing `--pid self` evaluates the container's own effective capabilities, namespace boundaries, seccomp filters, and mount exposures directly:
+
 ```bash
-./nspect --pid $$
+# Audit the security posture of an unprivileged Rock container:
+docker run --rm --user 10001:10001 --entrypoint /usr/bin/nspect nspect:0.0.10 -p self
+
+# Audit via the Web Console REST API:
+curl http://localhost:8080/api/audit/self
 ```
+
+> **Automatic Unprivileged Fallback:** If `nspect` is executed in an unprivileged container without `CAP_SYS_PTRACE` or root permissions (where inspecting other host PIDs is restricted), it automatically audits `self` instead of failing with permission errors.
 
 ### 3. Display Process Hierarchy & Container Trees
 Visualize parent/child relationships and container boundary trees:
@@ -130,6 +147,8 @@ sudo ./nspect -t
 
 # Audit a specific target PID with process hierarchy details:
 ./nspect --pid <PID> --tree
+# Or self-audit with tree lineage:
+./nspect --pid self --tree
 ```
 
 ### 4. Auto-Apply Systemd Service Overrides
