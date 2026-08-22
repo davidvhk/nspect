@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -34,7 +35,14 @@ func Start(host string, port int) error {
 	mux.HandleFunc("/api/kernel", handleKernel)
 
 	fmt.Printf("%s[+] Starting nspect web console on http://%s:%d%s\n", auditor.Bold+auditor.Green, host, port, auditor.Reset)
-	fmt.Printf("[+] Auditing server ready. Scan isolated containers or input target PIDs.\n")
+	
+	// Check if running with privileges to inspect host namespaces
+	if _, err := auditor.GetNamespaceInode(1, "mnt"); err != nil {
+		fmt.Printf("%s[!] Notice: Running without root / CAP_SYS_PTRACE privileges.%s\n", auditor.Yellow, auditor.Reset)
+		fmt.Printf("    Host-wide container discovery is restricted. Web console will audit the local container context (PID %d).\n", os.Getpid())
+	} else {
+		fmt.Printf("[+] Auditing server ready. Scan isolated containers or input target PIDs.\n")
+	}
 	
 	return http.Serve(listener, mux)
 }
@@ -59,7 +67,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 // handleListContainers lists all isolated processes running on the host
 func handleListContainers(w http.ResponseWriter, _ *http.Request) {
 	processes, err := auditor.FindIsolatedProcesses()
-	if err != nil {
+	if err != nil && !errors.Is(err, auditor.ErrPermissionRestricted) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": fmt.Sprintf("Failed to scan processes: %v", err),
 		})
@@ -87,10 +95,16 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pidStr := pathParts[0]
-	pid, err := strconv.Atoi(pidStr)
-	if err != nil || pid <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid PID"})
-		return
+	var pid int
+	if strings.EqualFold(pidStr, "self") || pidStr == "0" {
+		pid = os.Getpid()
+	} else {
+		parsedPID, err := strconv.Atoi(pidStr)
+		if err != nil || parsedPID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid PID"})
+			return
+		}
+		pid = parsedPID
 	}
 
 	// Option to mask environment variables (default true for web dashboard safety)

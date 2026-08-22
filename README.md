@@ -75,8 +75,24 @@ make package
 ```
 
 This will output:
-- **Debian Package:** `nspect_0.0.1_amd64.deb` (install with `sudo dpkg -i nspect_0.0.1_amd64.deb`)
-- **RPM Package:** `nspect-0.0.1-1.x86_64.rpm` (install with `sudo rpm -ivh nspect-0.0.1-1.x86_64.rpm`)
+- **Debian Package:** `nspect_0.0.10_amd64.deb` (install with `sudo dpkg -i nspect_0.0.10_amd64.deb`)
+- **RPM Package:** `nspect-0.0.10-1.x86_64.rpm` (install with `sudo rpm -ivh nspect-0.0.10-1.x86_64.rpm`)
+
+### Building OCI Rock Container (Rockcraft)
+To package `nspect` as a hardened, ultra-minimal OCI container image using Canonical Rockcraft (`base: bare`):
+
+```bash
+# Build the Rock (produces nspect_0.0.10_amd64.rock)
+rockcraft pack
+
+# Import directly into local Docker daemon using rockcraft's bundled skopeo:
+rockcraft.skopeo --insecure-policy copy oci-archive:nspect_0.0.10_amd64.rock docker-daemon:nspect:0.0.10
+
+# Run the live Web Console dashboard
+sudo docker run --name nspect --rm --pid=host --privileged -v /proc:/proc:ro -p 8080:8080 nspect:0.0.10
+```
+
+For full container deployment options, Docker Compose configurations, and minimal capability profiles (without `--privileged`), see the [OCI Rock Deployment Guide](docs/rock.md).
 
 ---
 
@@ -758,7 +774,7 @@ git push origin v0.0.1
 
 ## Author
 
-* **David Vanhoucke** - *Main Author & Maintainer* - [vanhouckedavid@gmail.com](mailto:vanhouckedavid@gmail.com)
+* **David Vanhoucke** - *Main Author & Maintainer* 
 
 ---
 

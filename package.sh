@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-VERSION="0.0.7"
+VERSION="${1:-$(cat VERSION 2>/dev/null || echo "0.0.10")}"
+VERSION=$(echo "$VERSION" | tr -d '\r\n')
 ARCH="amd64"
 RPM_ARCH="x86_64"
 
@@ -64,7 +65,11 @@ RPM_DIR="$(pwd)/build/rpm"
 mkdir -p "$RPM_DIR"/{SOURCES,SPECS,BUILD,RPMS,SRPMS,BUILDROOT}
 
 # Create source tarball
-tar -czf "$RPM_DIR/SOURCES/nspect-${VERSION}.tar.gz" --exclude=build --transform "s,^,nspect-${VERSION}/," *
+mkdir -p "$RPM_DIR/SOURCES/nspect-${VERSION}"
+cp -r ./* "$RPM_DIR/SOURCES/nspect-${VERSION}/" 2>/dev/null || true
+rm -rf "$RPM_DIR/SOURCES/nspect-${VERSION}/build"
+tar -czf "$RPM_DIR/SOURCES/nspect-${VERSION}.tar.gz" -C "$RPM_DIR/SOURCES" "nspect-${VERSION}"
+rm -rf "$RPM_DIR/SOURCES/nspect-${VERSION}"
 
 cat <<EOF > "$RPM_DIR/SPECS/nspect.spec"
 Name:           nspect
@@ -72,8 +77,11 @@ Version:        ${VERSION}
 Release:        1
 Summary:        Linux Capability & Namespace Auditor
 License:        AGPLv3
-URL:            https://github.com/david/nspect
+URL:            https://github.com/davidvhk/nspect
 Source0:        nspect-%{version}.tar.gz
+
+%define _build_id_links none
+%define __strip /bin/true
 
 %description
 A lightweight, zero-dependency Go tool designed to audit namespace isolation, capabilities, writeable mounts, environment variable passwords/secrets, socket configurations, and file descriptor limits.
@@ -93,13 +101,15 @@ cp nspect \$RPM_BUILD_ROOT/usr/local/bin/nspect
 /usr/local/bin/nspect
 
 %changelog
-* Sat Jun 27 2026 David Vanhoucke <vanhouckedavid@gmail.com> - 0.0.1-1
-- Initial beta release
+* Sat Aug 22 2026 David Vanhoucke <vanhouckedavid@gmail.com> - 0.0.10-1
+- Add rock image packaging and breakout assessment
 * Sun Jun 28 2026 David Vanhoucke <vanhouckedavid@gmail.com> - 0.0.2-1
 - add mounting audit
+* Sat Jun 27 2026 David Vanhoucke <vanhouckedavid@gmail.com> - 0.0.1-1
+- Initial beta release
 EOF
 
-rpmbuild --define "_topdir $RPM_DIR" -bb "$RPM_DIR/SPECS/nspect.spec"
+rpmbuild --define "_topdir $RPM_DIR" --define "__os_install_post %{nil}" -bb "$RPM_DIR/SPECS/nspect.spec"
 
 # Copy generated RPM back to root
 cp "$RPM_DIR/RPMS/x86_64/nspect-${VERSION}-1.x86_64.rpm" ./nspect-${VERSION}-1.x86_64.rpm

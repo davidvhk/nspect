@@ -203,11 +203,16 @@ var targetHighRiskSyscalls = []highRiskSyscall{
 }
 
 // AuditSeccomp evaluates Seccomp configuration, filters count, notifier listeners, and BPF policy
-func AuditSeccomp(pid int, kv map[string]string, noNewPrivs bool) *SeccompAuditDetails {
+func AuditSeccomp(pid int, kv map[string]string, noNewPrivs bool, fsOpts ...*FilesystemAuditResult) *SeccompAuditDetails {
 	details := &SeccompAuditDetails{
 		Mode:        0,
 		ModeDesc:    "Disabled",
 		FilterCount: 0,
+	}
+
+	var fsResult *FilesystemAuditResult
+	if len(fsOpts) > 0 && fsOpts[0] != nil {
+		fsResult = fsOpts[0]
 	}
 
 	// 1. Read Seccomp Mode & Filter Count from /proc/[pid]/status
@@ -251,7 +256,9 @@ func AuditSeccomp(pid int, kv map[string]string, noNewPrivs bool) *SeccompAuditD
 	}
 
 	// 3. Co-enforcement check with NoNewPrivs
-	if !noNewPrivs {
+	if !noNewPrivs && !(fsResult != nil && fsResult.SUIDCount == 0) {
+		// In Distroless / Chiselled workloads without SUID binaries, SUID bypass is neutralized at rest.
+		// Only warn when SUID binaries are present or filesystem info is unavailable.
 		details.Risks = append(details.Risks, "Seccomp filter is active, but NoNewPrivs is disabled. Unprivileged subprocesses could attempt privilege escalation or SUID bypass.")
 		details.Recommendations = append(details.Recommendations, "Set 'NoNewPrivileges=true' to ensure child processes maintain Seccomp filter enforcement.")
 	}

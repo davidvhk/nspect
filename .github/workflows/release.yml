@@ -1,25 +1,40 @@
-name: Release
+name: Release Packages (RPM and DEB)
 
 on:
   push:
+    branches:
+      - 'master'
+      - 'main'
     tags:
-      - 'v*' # Trigger when pushing version tags (e.g., v0.0.1)
+      - 'v*'
+  workflow_dispatch:
 
 permissions:
-  contents: write # Permission required to publish releases and upload files
+  contents: write
 
 jobs:
-  build-and-release:
+  release:
+    name: Build Packages and Release
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Get Version
+        id: get_version
+        run: |
+          TAG=$(cat ./VERSION | tr -d '\r\n')
+          echo "TAG=$TAG" >> $GITHUB_ENV
+        shell: bash
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version-file: 'go.mod'
+          cache: true
 
       - name: Install rpmbuild
         run: |
@@ -30,16 +45,19 @@ jobs:
         run: make test
 
       - name: Build Binary and Packages
-        run: make package
+        run: ./package.sh ${{ env.TAG }}
 
       - name: Create Release and Upload Assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        if: github.event_name == 'push'
         with:
           files: |
             nspect_*_amd64.deb
             nspect-*-1.x86_64.rpm
             nspect
-          draft: false
-          prerelease: false
+          tag_name: v${{ env.TAG }}
+          name: Release v${{ env.TAG }}
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

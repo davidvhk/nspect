@@ -163,7 +163,10 @@ func isKernelPseudoFS(fsType string) bool {
 }
 
 // AuditMounts audits the mount configuration of a given process.
-func AuditMounts(pid int) (*MountAuditResult, error) {
+// caps is optional — when provided, findings are correlated against the
+// process's effective capabilities so that mounts requiring a capability
+// the process doesn't hold are downgraded from Critical/High to Info/Low.
+func AuditMounts(pid int, caps ...*CapabilityAuditResult) (*MountAuditResult, error) {
 	mounts, err := ReadMountInfo(pid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read mountinfo: %w", err)
@@ -181,10 +184,52 @@ func AuditMounts(pid int) (*MountAuditResult, error) {
 	}
 
 	isUnprivileged := CheckUnprivilegedUserNS(pid)
-	return auditMountsInternal(mounts, lsmProfile, isUnprivileged), nil
+
+	var capResult *CapabilityAuditResult
+	if len(caps) > 0 {
+		capResult = caps[0]
+	}
+
+	return auditMountsInternal(mounts, lsmProfile, isUnprivileged, capResult), nil
 }
 
-func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged bool) *MountAuditResult {
+// hasEffectiveCap reports whether any of the named capabilities appear in the
+// process's effective capability set. Returns true when caps is nil (unknown /
+// privileged), so findings are never incorrectly suppressed for unchecked procs.
+func hasEffectiveCap(caps *CapabilityAuditResult, names ...string) bool {
+	if caps == nil {
+		return true // unknown — assume worst case
+	}
+	for _, want := range names {
+		for _, have := range caps.Sets.Effective {
+			if strings.EqualFold(have, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// capMitigatedLevel returns a downgraded risk level and an explanatory suffix
+// when the process lacks the capability required to exploit a mount finding.
+// If the cap is present (or unknown), the original level is returned unchanged.
+func capMitigatedLevel(caps *CapabilityAuditResult, originalLevel string, requiredCaps ...string) (level string, mitigated bool, note string) {
+	if hasEffectiveCap(caps, requiredCaps...) {
+		return originalLevel, false, ""
+	}
+	capsStr := strings.Join(requiredCaps, " or ")
+	note = fmt.Sprintf(" [Mitigated: process holds no effective capabilities (%s required to exploit)]", capsStr)
+	switch originalLevel {
+	case "Critical":
+		return "Low", true, note
+	case "High":
+		return "Low", true, note
+	default:
+		return originalLevel, false, ""
+	}
+}
+
+func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged bool, caps *CapabilityAuditResult) *MountAuditResult {
 	lsmRestrictsWrites := false
 	if lsmProfile != "none" && lsmProfile != "unconfined" && !strings.Contains(lsmProfile, "unconfined") && !strings.Contains(lsmProfile, "(complain)") {
 		// AppArmor / SELinux active and enforcing
@@ -242,7 +287,7 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 		// 2. Sensitive paths (procfs, sysfs, hosts/devs)
 		if isRW {
 			if m.MountPoint == "/proc" || strings.HasPrefix(m.MountPoint, "/proc/") {
-				// Writable /proc is extremely dangerous unless protected by LSM
+				// Writable /proc is extremely dangerous unless protected by LSM or lack of caps
 				if lsmRestrictsWrites {
 					risks = append(risks, MountRisk{
 						MountPoint:  m.MountPoint,
@@ -261,17 +306,23 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 					})
 					deductions["proc"] += 10
 				} else {
+					level, mitigated, note := capMitigatedLevel(caps, "Critical", "CAP_SYS_ADMIN")
+					desc := "Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes."
 					risks = append(risks, MountRisk{
 						MountPoint:  m.MountPoint,
 						MountSource: m.MountSource,
 						FSType:      m.FSType,
-						RiskLevel:   "Critical",
-						Description: "Writable /proc filesystem. Allows altering kernel parameters, sysctl values, or modifying core_pattern to trigger host commands upon crashes.",
+						RiskLevel:   level,
+						Description: desc + note,
 					})
-					deductions["proc"] += 35
+					if !mitigated {
+						deductions["proc"] += 35
+					} else {
+						deductions["proc"] += 3
+					}
 				}
 			} else if m.MountPoint == "/sys" || strings.HasPrefix(m.MountPoint, "/sys/") {
-				// Writable /sys is extremely dangerous unless protected by LSM
+				// Writable /sys is extremely dangerous unless protected by LSM or lack of caps
 				if lsmRestrictsWrites {
 					risks = append(risks, MountRisk{
 						MountPoint:  m.MountPoint,
@@ -290,47 +341,85 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 					})
 					deductions["sys"] += 10
 				} else {
+					level, mitigated, note := capMitigatedLevel(caps, "Critical", "CAP_SYS_ADMIN")
+					desc := "Writable /sys filesystem. Allows direct manipulation of kernel interfaces, cgroup configs, device configurations, or loading modules/drivers."
 					risks = append(risks, MountRisk{
 						MountPoint:  m.MountPoint,
 						MountSource: m.MountSource,
 						FSType:      m.FSType,
-						RiskLevel:   "Critical",
-						Description: "Writable /sys filesystem. Allows direct manipulation of kernel interfaces, cgroup configs, device configurations, or loading modules/drivers.",
+						RiskLevel:   level,
+						Description: desc + note,
 					})
-					deductions["sys"] += 35
+					if !mitigated {
+						deductions["sys"] += 35
+					} else {
+						deductions["sys"] += 3
+					}
 				}
 			} else if m.MountPoint == "/dev" || m.FSType == "devtmpfs" {
-				if isUnprivileged {
+				safeCharDevices := map[string]bool{
+					"/dev/null": true, "/dev/zero": true, "/dev/full": true,
+					"/dev/random": true, "/dev/urandom": true, "/dev/tty": true,
+					"/dev/ptmx": true, "/dev/fuse": true,
+				}
+
+				if safeCharDevices[m.MountPoint] {
 					risks = append(risks, MountRisk{
 						MountPoint:  m.MountPoint,
 						MountSource: m.MountSource,
 						FSType:      m.FSType,
-						RiskLevel:   "Medium",
-						Description: "[Sandboxed by User Namespace] Writable /dev or devtmpfs. While normally high risk, user namespace mapping prevents the creation of new physical device nodes (CAP_MKNOD is restricted).",
+						RiskLevel:   "Info",
+						Description: fmt.Sprintf("Standard container character device node (%s) mounted from host.", m.MountPoint),
 					})
-					deductions["dev"] += 10
+				} else if isUnprivileged {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Info",
+						Description: "[Sandboxed by User Namespace] Container /dev filesystem. User namespace mapping prevents creation of raw physical device nodes.",
+					})
+				} else if lsmRestrictsWrites && m.FSType == "tmpfs" {
+					risks = append(risks, MountRisk{
+						MountPoint:  m.MountPoint,
+						MountSource: m.MountSource,
+						FSType:      m.FSType,
+						RiskLevel:   "Info",
+						Description: fmt.Sprintf("Writable container /dev tmpfs detected. Raw device node creation and host hardware access are constrained by active LSM profile (%s).", lsmProfile),
+					})
 				} else {
+					level, mitigated, note := capMitigatedLevel(caps, "High", "CAP_MKNOD", "CAP_SYS_ADMIN")
+					desc := "Writable /dev or devtmpfs. Allows processes (with CAP_MKNOD or raw device write) to create raw physical drive nodes (e.g. sda) and read/write host filesystems directly."
 					risks = append(risks, MountRisk{
 						MountPoint:  m.MountPoint,
 						MountSource: m.MountSource,
 						FSType:      m.FSType,
-						RiskLevel:   "High",
-						Description: "Writable /dev or devtmpfs. Allows processes (with CAP_MKNOD or raw device write) to create raw physical drive nodes (e.g. sda) and read/write host filesystems directly.",
+						RiskLevel:   level,
+						Description: desc + note,
 					})
-					deductions["dev"] += 30
+					if !mitigated {
+						deductions["dev"] += 30
+					} else {
+						deductions["dev"] += 3
+					}
 				}
 			} else if strings.HasPrefix(m.MountPoint, "/lib/modules") || strings.Contains(srcLower, "/lib/modules") {
+				level, mitigated, note := capMitigatedLevel(caps, "Critical", "CAP_SYS_MODULE", "CAP_SYS_ADMIN")
+				desc := "Writable /lib/modules host path is exposed. Enables replacing host kernel modules, allowing execution of code directly in host kernel context."
 				risks = append(risks, MountRisk{
 					MountPoint:  m.MountPoint,
 					MountSource: m.MountSource,
 					FSType:      m.FSType,
-					RiskLevel:   "Critical",
-					Description: "Writable /lib/modules host path is exposed. Enables replacing host kernel modules, allowing execution of code directly in host kernel context.",
+					RiskLevel:   level,
+					Description: desc + note,
 				})
-				deductions["libmodules"] += 35
+				if !mitigated {
+					deductions["libmodules"] += 35
+				} else {
+					deductions["libmodules"] += 5
+				}
 			} else if m.MountPoint == "/" {
 				// Standard containers have writable root, but hardened ones might set read-only root.
-				// We classify this as Low or Info. Let's make it Info/Low since it's normal but good to note.
 				risks = append(risks, MountRisk{
 					MountPoint:  m.MountPoint,
 					MountSource: m.MountSource,
@@ -386,8 +475,13 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 		}
 
 		// 5. General Mount Hardening Flags on external/bind/network/tmpfs mounts
+		// Skip container-injected networking config files and Docker/runc masked /proc and /sys subpaths
+		isContainerConfig := m.MountPoint == "/etc/resolv.conf" || m.MountPoint == "/etc/hostname" || m.MountPoint == "/etc/hosts" || m.MountPoint == "/etc/timezone" || m.MountPoint == "/etc/localtime"
+		isProcOrSysSubpath := strings.HasPrefix(m.MountPoint, "/proc/") || strings.HasPrefix(m.MountPoint, "/sys/")
+
 		if isRW && m.MountPoint != "/" && !isKernelPseudoFS(m.FSType) &&
-			m.MountPoint != "/tmp" && m.MountPoint != "/dev/shm" && m.MountPoint != "/run/lock" {
+			m.MountPoint != "/tmp" && m.MountPoint != "/dev/shm" && m.MountPoint != "/run/lock" &&
+			m.MountPoint != "/dev" && !isContainerConfig && !isProcOrSysSubpath {
 			
 			if !hasOption(m.MountOptions, "nosuid") && !hasOption(m.SuperOptions, "nosuid") {
 				if isUnprivileged {
@@ -549,14 +643,20 @@ func auditMountsInternal(mounts []MountInfo, lsmProfile string, isUnprivileged b
 				})
 				deductions["shared"] += 5
 			} else {
+				level, mitigated, note := capMitigatedLevel(caps, "High", "CAP_SYS_ADMIN")
+				desc := fmt.Sprintf("Mount %s is configured with shared propagation ('shared:'). Any mount or unmount event inside the namespace will propagate back to the host, posing a container escape or denial-of-service vector.", m.MountPoint)
 				risks = append(risks, MountRisk{
 					MountPoint:  m.MountPoint,
 					MountSource: m.MountSource,
 					FSType:      m.FSType,
-					RiskLevel:   "High",
-					Description: fmt.Sprintf("Mount %s is configured with shared propagation ('shared:'). Any mount or unmount event inside the namespace will propagate back to the host, posing a container escape or denial-of-service vector.", m.MountPoint),
+					RiskLevel:   level,
+					Description: desc + note,
 				})
-				deductions["shared"] += 20
+				if !mitigated {
+					deductions["shared"] += 20
+				} else {
+					deductions["shared"] += 2
+				}
 			}
 		}
 	}

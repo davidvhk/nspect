@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: nspect
-Source: https://github.com/david/nspect
+Source: https://github.com/davidvhk/nspect
 
 Files: *
 Copyright: 2026 David Vanhoucke <vanhouckedavid@gmail.com>

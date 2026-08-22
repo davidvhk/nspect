@@ -1,0 +1,53 @@
+name: nspect
+summary: Linux Capability & Namespace Auditor
+description: |
+  nspect is a lightweight, zero-dependency Go tool that audits container
+  isolation: Linux namespaces, capabilities, writable mounts, environment
+  secrets, seccomp filters, filesystem risks, and kernel hardening settings.
+
+  Run it as a privileged container alongside other workloads to continuously
+  audit their security posture from the outside.
+
+version: "0.0.10"
+license: AGPL-3.0
+
+# bare = completely empty root filesystem — the ultimate chisel.
+# Since nspect is a statically-linked Go binary (CGO_ENABLED=0), it has
+# zero shared library requirements: no libc, no libpthread, nothing.
+base: bare
+build-base: ubuntu@24.04
+
+platforms:
+  amd64:
+
+parts:
+  nspect:
+    plugin: go
+    source: .
+    build-snaps:
+      - go/1.24/stable
+    build-environment:
+      - CGO_ENABLED: "0"
+      - GOFLAGS: "-trimpath"
+      - LDFLAGS: "-s -w"
+    organize:
+      bin/nspect: usr/bin/nspect
+
+services:
+  # Web console mode: expose the live audit dashboard on port 8080.
+  # Use `ROCKCRAFT_OVERRIDE_CMD` or pebble layers to switch to CLI mode.
+  nspect-server:
+    override: replace
+    command: /usr/bin/nspect --server --host 0.0.0.0 --port 8080
+    startup: enabled
+    environment:
+      # Pebble passes these through; override at runtime with docker/k8s env vars.
+      NSPECT_HOST: "0.0.0.0"
+      NSPECT_PORT: "8080"
+
+  # One-shot list mode: prints all isolated processes to stdout and exits.
+  # Activate with: `pebble run --hold` + `pebble start nspect-list`
+  nspect-list:
+    override: replace
+    command: /usr/bin/nspect --list
+    startup: disabled

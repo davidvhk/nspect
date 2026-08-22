@@ -5,9 +5,19 @@ container-check
 # Temporary build folder
 build/
 
-# Package installers
+# Package installers & Rock images
 *.deb
 *.rpm
+*.rock
+
+# Rockcraft & build directories
+.rockcraft/
+stage/
+prime/
+parts/
+
+# Generated SBOM artifacts
+*.spdx.json
 
 # Test and run logs
 *.log
