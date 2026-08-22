@@ -1,0 +1,49 @@
+name: Build and Publish Rock (OCI)
+
+on:
+  push:
+    branches:
+      - 'master'
+      - 'main'
+  workflow_dispatch:
+
+jobs:
+  rock:
+    name: Build and Push Rock Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # needed to push to GHCR
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Get Version
+        run: |
+          TAG=$(cat ./VERSION | tr -d '\r\n')
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Build Rock
+        uses: canonical/craft-actions/rockcraft-pack@acd2f2e61c7563b38ba89390ca0e910fa7d2784f # v0.1.1
+        id: rockcraft
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Rock to GHCR
+        run: |
+          IMAGE="ghcr.io/${{ github.repository_owner }}/nspect"
+          ROCK_FILE="${{ steps.rockcraft.outputs.rock }}"
+
+          skopeo --insecure-policy copy \
+            oci-archive:"${ROCK_FILE}" \
+            docker://${IMAGE}:${{ env.TAG }}
+
+          skopeo --insecure-policy copy \
+            oci-archive:"${ROCK_FILE}" \
+            docker://${IMAGE}:latest

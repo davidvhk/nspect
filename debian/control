@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: David Vanhoucke <vanhouckedavid@gmail.com>
 Build-Depends: debhelper-compat (= 13), golang-go
 Standards-Version: 4.6.2
-Homepage: https://github.com/david/nspect
+Homepage: https://github.com/davidvhk/nspect
 
 Package: nspect
 Architecture: any

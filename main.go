@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -17,7 +18,7 @@ func printUsage() {
 	fmt.Printf("Linux Capability & Namespace Auditor (nspect)\n")
 	fmt.Printf("Usage: %s [flags]\n\n", os.Args[0])
 	fmt.Printf("Flags:\n")
-	fmt.Printf("  -p, --pid <PID>         Audit the specified process ID\n")
+	fmt.Printf("  -p, --pid <PID>         Audit the specified process ID (or 'self' for current process)\n")
 	fmt.Printf("  -l, --list              List all running processes in isolated namespaces (containers/sandboxes)\n")
 	fmt.Printf("  -m, --mask              Mask sensitive environment variables instead of showing them in plaintext\n")
 	fmt.Printf("  -t, --tree              Display container process hierarchy & parent/child tree\n")
@@ -148,30 +149,34 @@ func main() {
 	if pidFlag == "" {
 		// If no PID is specified, scan for isolated processes and present them
 		processes, err := auditor.FindIsolatedProcesses()
-		if err != nil {
+		if errors.Is(err, auditor.ErrPermissionRestricted) {
+			fmt.Fprintf(os.Stderr, "%s[!] Notice: Insufficient permissions to scan host namespaces (requires root privileges or CAP_SYS_PTRACE).%s\n", auditor.Yellow, auditor.Reset)
+			fmt.Fprintf(os.Stderr, "    Auditing current process/container context (PID %d):\n\n", os.Getpid())
+			targetPID = os.Getpid()
+		} else if err != nil {
 			fmt.Fprintf(os.Stderr, "Error scanning for isolated processes: %v\n", err)
 			os.Exit(1)
-		}
-
-		if len(processes) == 0 {
+		} else if len(processes) == 0 {
 			fmt.Printf("No running isolated processes (containers/sandboxes) detected.\n")
 			fmt.Printf("To audit a specific process, run: %s --pid <PID>\n", os.Args[0])
-			fmt.Printf("Or audit the auditor's own process: %s --pid %d\n", os.Args[0], os.Getpid())
+			fmt.Printf("Or audit the auditor's own process: %s --pid self\n", os.Args[0])
+			os.Exit(0)
+		} else {
+			fmt.Printf("No target PID specified. Running isolated processes found on this host:\n\n")
+			printProcessTable(processes)
+			fmt.Printf("\nTo audit a process from the list, run: %s --pid <PID>\n", os.Args[0])
 			os.Exit(0)
 		}
-
-		fmt.Printf("No target PID specified. Running isolated processes found on this host:\n\n")
-		printProcessTable(processes)
-		fmt.Printf("\nTo audit a process from the list, run: %s --pid <PID>\n", os.Args[0])
-		os.Exit(0)
+	} else if strings.EqualFold(pidFlag, "self") || pidFlag == "0" {
+		targetPID = os.Getpid()
+	} else {
+		pid, err := strconv.Atoi(pidFlag)
+		if err != nil || pid <= 0 {
+			fmt.Fprintf(os.Stderr, "Invalid PID: %s (must be a positive integer or 'self')\n", pidFlag)
+			os.Exit(1)
+		}
+		targetPID = pid
 	}
-
-	pid, err := strconv.Atoi(pidFlag)
-	if err != nil || pid <= 0 {
-		fmt.Fprintf(os.Stderr, "Invalid PID: %s\n", pidFlag)
-		os.Exit(1)
-	}
-	targetPID = pid
 
 	// 3. Verify PID exists
 	if !util.ProcessExists(targetPID) {
@@ -312,6 +317,12 @@ func main() {
 
 func listIsolated() {
 	processes, err := auditor.FindIsolatedProcesses()
+	if errors.Is(err, auditor.ErrPermissionRestricted) {
+		fmt.Fprintf(os.Stderr, "%s[!] Notice: Insufficient permissions to scan host namespaces (requires root privileges or CAP_SYS_PTRACE).%s\n", auditor.Yellow, auditor.Reset)
+		fmt.Fprintf(os.Stderr, "    Showing current process/container context (PID %d):\n\n", os.Getpid())
+		printProcessTable(processes)
+		return
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error scanning for isolated processes: %v\n", err)
 		os.Exit(1)

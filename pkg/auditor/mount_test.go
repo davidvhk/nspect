@@ -192,7 +192,7 @@ func TestAuditMountsInternal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res := auditMountsInternal(tt.mounts, tt.lsmProfile, tt.isUnprivileged)
+			res := auditMountsInternal(tt.mounts, tt.lsmProfile, tt.isUnprivileged, nil)
 			if len(res.Risks) != tt.wantRisks {
 				t.Errorf("got %d risks, want %d risks. Risks: %+v", len(res.Risks), tt.wantRisks, res.Risks)
 			}

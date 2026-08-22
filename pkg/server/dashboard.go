@@ -1510,6 +1510,10 @@ const DashboardHTML = `<!DOCTYPE html>
                     <svg viewBox="0 0 24 24"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M12,6A6,6 0 0,0 6,12A6,6 0 0,0 12,18A6,6 0 0,0 18,12A6,6 0 0,0 12,6M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8Z"/></svg>
                     Secrets
                 </button>
+                <button class="tab-btn" data-tab="tab-breakout" style="color: #f43f5e; border-color: rgba(244, 63, 94, 0.4);">
+                    <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+                    Breakout Feasibility
+                </button>
                 <button class="tab-btn" data-tab="tab-artifacts" style="color: #60a5fa; border-color: rgba(59, 130, 246, 0.4);">
                     <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
                     Hardening Generator
@@ -1591,6 +1595,19 @@ const DashboardHTML = `<!DOCTYPE html>
                                 <div class="metric-value-row">
                                     <span class="metric-value" id="metric-risks-count">2</span>
                                     <span class="metric-status danger" id="metric-risks-status">Risks</span>
+                                </div>
+                            </div>
+
+                            <div class="metric-widget" onclick="switchTab('tab-breakout')" title="Click to view Breakout Feasibility Assessment" style="border-color: rgba(244, 63, 94, 0.3);">
+                                <div class="metric-label-row">
+                                    <span class="metric-label">Breakout Risk</span>
+                                    <div class="metric-icon" style="background: rgba(244, 63, 94, 0.1);">
+                                        <svg viewBox="0 0 24 24" style="fill: #f43f5e;"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+                                    </div>
+                                </div>
+                                <div class="metric-value-row">
+                                    <span class="metric-value" id="metric-breakout-verdict" style="font-size: 0.95rem;">Not Feasible</span>
+                                    <span class="metric-status success" id="metric-breakout-status">Safe</span>
                                 </div>
                             </div>
 
@@ -2011,6 +2028,25 @@ const DashboardHTML = `<!DOCTYPE html>
                             Production-ready Kubernetes Deployment manifest with hardened Pod and Container <code>securityContext</code>.
                         </div>
                         <pre style="background: #0d1117; color: #4ade80; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; border: 1px solid var(--border-color);" id="artifact-k8s-code"></pre>
+                    </div>
+                </div>
+
+                <!-- Tab: Breakout Feasibility Assessment -->
+                <div class="tab-content" id="tab-breakout">
+                    <div class="section-card">
+                        <div class="section-card-title">
+                            <div class="section-card-title-text">
+                                <svg viewBox="0 0 24 24" style="fill: #f43f5e;"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+                                Breakout Feasibility Assessment
+                            </div>
+                            <span class="risk-badge info" id="breakout-overall-badge">OVERALL: NOT FEASIBLE</span>
+                        </div>
+                        <div style="margin-bottom: 1.25rem; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;">
+                            Cross-correlates active Linux capabilities, namespace boundaries, volume/mount exposures, and container tooling inventory (shells, downloaders, admin utilities, rootfs writability) to evaluate whether discovered risks represent a realistically exploitable host escape vector in practice.
+                        </div>
+                        <div id="breakout-vectors-list" style="display: flex; flex-direction: column; gap: 1rem;">
+                            <!-- Populated dynamically -->
+                        </div>
                     </div>
                 </div>
 
@@ -2977,6 +3013,83 @@ const DashboardHTML = `<!DOCTYPE html>
 
             if (rems.systemd_override_path) {
                 document.getElementById('systemd-override-desc').textContent = 'Auto-generated drop-in file enforcing NoNewPrivileges, PrivateTmp, ProtectKernelTunables, ProtectControlGroups, and resource limits for target path: ' + rems.systemd_override_path;
+            }
+
+            // 12. Breakout Feasibility Assessment Tab
+            const breakout = report.breakout_feasibility;
+            const verdict = breakout ? breakout.overall_verdict : 'Not Feasible';
+            const bVerdictEl = document.getElementById('metric-breakout-verdict');
+            const bStatusEl = document.getElementById('metric-breakout-status');
+            const bOverallBadge = document.getElementById('breakout-overall-badge');
+            
+            if (bVerdictEl) bVerdictEl.textContent = verdict;
+            if (bStatusEl) {
+                bStatusEl.className = 'metric-status';
+                if (verdict === 'Not Feasible') {
+                    bStatusEl.classList.add('success');
+                    bStatusEl.textContent = 'Safe';
+                } else if (verdict === 'Low') {
+                    bStatusEl.classList.add('success');
+                    bStatusEl.textContent = 'Low Risk';
+                } else if (verdict === 'Moderate') {
+                    bStatusEl.classList.add('warning');
+                    bStatusEl.textContent = 'Moderate';
+                } else {
+                    bStatusEl.classList.add('danger');
+                    bStatusEl.textContent = verdict;
+                }
+            }
+            if (bOverallBadge) {
+                bOverallBadge.textContent = 'OVERALL: ' + verdict.toUpperCase();
+                bOverallBadge.className = 'risk-badge';
+                if (verdict === 'Not Feasible' || verdict === 'Low') {
+                    bOverallBadge.classList.add('low');
+                } else if (verdict === 'Moderate') {
+                    bOverallBadge.classList.add('medium');
+                } else {
+                    bOverallBadge.classList.add('critical');
+                }
+            }
+
+            const bListEl = document.getElementById('breakout-vectors-list');
+            if (bListEl) {
+                bListEl.innerHTML = '';
+                const assessments = (breakout && breakout.assessments) ? breakout.assessments : [];
+                if (assessments.length === 0) {
+                    bListEl.innerHTML = '<div style="color:var(--text-secondary);font-size:0.9rem;">No breakout attack vectors evaluated.</div>';
+                } else {
+                    assessments.forEach(a => {
+                        const card = document.createElement('div');
+                        let borderCol = 'rgba(16, 185, 129, 0.3)';
+                        let badgeClass = 'low';
+                        if (a.feasibility === 'Trivial' || a.feasibility === 'High') {
+                            borderCol = 'rgba(239, 68, 68, 0.4)';
+                            badgeClass = 'critical';
+                        } else if (a.feasibility === 'Moderate') {
+                            borderCol = 'rgba(245, 158, 11, 0.4)';
+                            badgeClass = 'medium';
+                        } else if (a.feasibility === 'Not Feasible') {
+                            borderCol = 'rgba(6, 182, 212, 0.3)';
+                            badgeClass = 'info';
+                        }
+                        card.style.cssText = 'background:rgba(17,24,39,0.7);border:1px solid ' + borderCol + ';border-radius:8px;padding:1.1rem;display:flex;flex-direction:column;gap:0.6rem;';
+                        
+                        let mitigationsHTML = '';
+                        if (a.mitigations && a.mitigations.length > 0) {
+                            mitigationsHTML = '<div style="margin-top:0.5rem;font-size:0.8rem;color:var(--text-secondary);"><strong style="color:var(--text-primary);">Recommended Mitigations:</strong><ul style="margin-left:1.25rem;margin-top:0.35rem;line-height:1.6;">' +
+                                a.mitigations.map(m => '<li style="margin-bottom:0.2rem;">' + escapeHTML(m) + '</li>').join('') +
+                                '</ul></div>';
+                        }
+
+                        card.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">' +
+                            '<strong style="font-size:0.95rem;color:#fff;">► ' + escapeHTML(a.vector) + '</strong>' +
+                            '<span class="risk-badge ' + badgeClass + '">' + escapeHTML(a.feasibility) + '</span>' +
+                            '</div>' +
+                            '<div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.5;">' + escapeHTML(a.explanation) + '</div>' +
+                            mitigationsHTML;
+                        bListEl.appendChild(card);
+                    });
+                }
             }
         }
 

@@ -287,26 +287,39 @@ func AuditFilesystem(pid int) (*FilesystemAuditResult, error) {
 		}
 	}
 
-	// Check /etc/os-release for Distroless / Chiselled / Rock signatures
-	isChiselled := hasPebble
-	isDistroless := !hasShell && !hasPkgMgr
+	isChiselled := false
+	isDistroless := false
+	osPrettyName := ""
 
 	if osRelData, err := os.ReadFile(filepath.Join(rootPath, "/etc/os-release")); err == nil {
 		contentLower := strings.ToLower(string(osRelData))
-		if strings.Contains(contentLower, "chisel") || strings.Contains(contentLower, "rock") {
+		for _, line := range strings.Split(string(osRelData), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "PRETTY_NAME=") {
+				osPrettyName = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
+			}
+		}
+
+		if (strings.Contains(contentLower, "chisel") || strings.Contains(contentLower, "rockcraft")) && !hasPkgMgr {
 			isChiselled = true
 		}
-		if strings.Contains(contentLower, "distroless") {
+		if strings.Contains(contentLower, "distroless") && !hasPkgMgr {
 			isDistroless = true
 		}
 	}
 
 	if !hasShell && !hasPkgMgr {
-		isChiselled = true
 		isDistroless = true
+		if hasPebble {
+			isChiselled = true
+		}
 	}
 
 	flavor := "Standard Linux Distribution"
+	if osPrettyName != "" {
+		flavor = osPrettyName
+	}
+
 	if hasPebble {
 		flavor = "Ubuntu Rock (Pebble Managed)"
 	} else if isChiselled {

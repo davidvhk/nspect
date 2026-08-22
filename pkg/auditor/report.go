@@ -9,22 +9,23 @@ import (
 
 // AuditReport aggregates all findings for a process.
 type AuditReport struct {
-	PID          int                   `json:"pid"`
-	ProcessName  string                `json:"process_name"`
-	Cmdline      string                `json:"cmdline"`
-	Namespaces   *NamespaceAuditResult `json:"namespaces"`
-	Capabilities *CapabilityAuditResult `json:"capabilities"`
-	Mounts       *MountAuditResult     `json:"mounts"`
-	Security     *SecurityAuditResult  `json:"security"`
-	Env          *EnvAuditResult       `json:"environment"`
-	Network      *NetAuditResult       `json:"network"`
-	FD           *FDAuditResult        `json:"file_descriptors"`
-	Filesystem   *FilesystemAuditResult `json:"filesystem"`
-	Systemd      *SystemdAuditResult   `json:"systemd,omitempty"`
-	ProcessTree  *ProcessTreeAuditResult `json:"process_tree,omitempty"`
-	Kernel       *KernelAuditResult    `json:"kernel,omitempty"`
-	Remediations *RemediationArtifacts `json:"remediations,omitempty"`
-	OverallScore int                   `json:"overall_score"`
+	PID          int                          `json:"pid"`
+	ProcessName  string                       `json:"process_name"`
+	Cmdline      string                       `json:"cmdline"`
+	Namespaces   *NamespaceAuditResult        `json:"namespaces"`
+	Capabilities *CapabilityAuditResult       `json:"capabilities"`
+	Mounts       *MountAuditResult            `json:"mounts"`
+	Security     *SecurityAuditResult         `json:"security"`
+	Env          *EnvAuditResult              `json:"environment"`
+	Network      *NetAuditResult              `json:"network"`
+	FD           *FDAuditResult               `json:"file_descriptors"`
+	Filesystem   *FilesystemAuditResult       `json:"filesystem"`
+	Systemd      *SystemdAuditResult          `json:"systemd,omitempty"`
+	ProcessTree  *ProcessTreeAuditResult      `json:"process_tree,omitempty"`
+	Kernel       *KernelAuditResult           `json:"kernel,omitempty"`
+	Breakout     *BreakoutFeasibilityResult   `json:"breakout_feasibility,omitempty"`
+	Remediations *RemediationArtifacts        `json:"remediations,omitempty"`
+	OverallScore int                          `json:"overall_score"`
 }
 
 // GenerateReport runs all audits on the target PID.
@@ -50,7 +51,7 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		return nil, fmt.Errorf("failed auditing capabilities: %w", err)
 	}
 
-	mountResult, err := AuditMounts(pid)
+	mountResult, err := AuditMounts(pid, capResult)
 	if err != nil {
 		return nil, fmt.Errorf("failed auditing mounts: %w", err)
 	}
@@ -108,6 +109,7 @@ func GenerateReport(pid int, name, cmdline string, maskSecrets bool) (*AuditRepo
 		OverallScore: overall,
 	}
 
+	report.Breakout = AssessBreakoutFeasibility(capResult, nsResult, mountResult, fsResult)
 	report.Remediations = GenerateRemediations(report)
 
 	return report, nil
@@ -579,8 +581,60 @@ func (r *AuditReport) RenderCLI() string {
 		}
 		sb.WriteString("\n")
 	}
+	// [BREAKOUT FEASIBILITY ASSESSMENT]
+	if r.Breakout != nil {
+		verdictColor := Green
+		switch r.Breakout.OverallVerdict {
+		case FeasibilityTrivial:
+			verdictColor = Red + Bold
+		case FeasibilityHigh:
+			verdictColor = Red
+		case FeasibilityModerate:
+			verdictColor = Yellow
+		case FeasibilityLow:
+			verdictColor = Yellow
+		}
+		sb.WriteString(fmt.Sprintf("%s[BREAKOUT FEASIBILITY ASSESSMENT]%s  Overall: %s%s%s\n",
+			Bold+Underline, Reset, verdictColor, r.Breakout.OverallVerdict, Reset))
+		sb.WriteString(strings.Repeat("-", 60) + "\n")
+		for _, a := range r.Breakout.Assessments {
+			fColor := Green
+			switch a.Feasibility {
+			case FeasibilityTrivial:
+				fColor = Red + Bold
+			case FeasibilityHigh:
+				fColor = Red
+			case FeasibilityModerate:
+				fColor = Yellow
+			case FeasibilityLow:
+				fColor = Yellow
+			}
+			sb.WriteString(fmt.Sprintf("  %s► %s%s\n", Bold, a.Vector, Reset))
+			sb.WriteString(fmt.Sprintf("    Feasibility : %s%s%s\n", fColor, a.Feasibility, Reset))
+			// Word-wrap explanation at 80 chars
+			words := strings.Fields(a.Explanation)
+			line := "    Explanation : "
+			for _, w := range words {
+				if len(line)+len(w)+1 > 90 {
+					sb.WriteString(line + "\n")
+					line = "                 " + w + " "
+				} else {
+					line += w + " "
+				}
+			}
+			if strings.TrimSpace(line) != "" {
+				sb.WriteString(line + "\n")
+			}
+			if len(a.Mitigations) > 0 {
+				sb.WriteString("    Mitigations :\n")
+				for _, m := range a.Mitigations {
+					sb.WriteString(fmt.Sprintf("      - %s\n", m))
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
 
-	// Summary Recommendation
 	recs := append([]string{}, r.Security.Recommendations...)
 	if r.Mounts != nil {
 		recs = append(recs, r.Mounts.Recommendations...)

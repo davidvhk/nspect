@@ -33,6 +33,18 @@ func (r *AuditReport) RenderHTML() (string, error) {
 				return "risk-info"
 			}
 		},
+		"feasibilityClass": func(f BreakoutFeasibility) string {
+			switch f {
+			case FeasibilityTrivial, FeasibilityHigh:
+				return "risk-critical"
+			case FeasibilityModerate:
+				return "risk-medium"
+			case FeasibilityLow:
+				return "risk-low"
+			default:
+				return "risk-info"
+			}
+		},
 		"recs": func(rep *AuditReport) []string {
 			var recs []string
 			if rep.Security != nil {
@@ -1124,6 +1136,48 @@ const htmlTemplate = `<!DOCTYPE html>
                             Hierarchy graph for target process <strong>PID {{.ProcessTree.TargetPID}}</strong>
                         </div>
                         <pre style="background: #0d1117; color: #38bdf8; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.85rem; line-height: 1.5; overflow-x: auto;">{{.ProcessTree.TreeASCII}}</pre>
+                    </div>
+                </details>
+                {{end}}
+
+                <!-- Breakout Feasibility Assessment -->
+                {{if .Breakout}}
+                <details open>
+                    <summary>
+                        <div class="summary-left">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+                            <span>[BREAKOUT FEASIBILITY ASSESSMENT]</span>
+                        </div>
+                        <div class="summary-right">
+                            <span class="badge {{feasibilityClass .Breakout.OverallVerdict}}">Overall: {{.Breakout.OverallVerdict}}</span>
+                            <svg class="caret" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5H7z"/></svg>
+                        </div>
+                    </summary>
+                    <div class="section-content">
+                        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem; line-height: 1.5;">
+                            Cross-correlates active Linux capabilities, namespace boundaries, volume/mount exposures, and container tooling inventory to evaluate whether discovered risks represent a realistically exploitable host escape vector in practice.
+                        </div>
+                        <div class="risk-list">
+                            {{range .Breakout.Assessments}}
+                            <div class="risk-card">
+                                <div class="risk-header">
+                                    <span class="risk-title">► {{.Vector}}</span>
+                                    <span class="badge {{feasibilityClass .Feasibility}}">{{.Feasibility}}</span>
+                                </div>
+                                <div class="risk-desc">{{.Explanation}}</div>
+                                {{if .Mitigations}}
+                                <div style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-secondary);">
+                                    <strong style="color: var(--text-primary);">Recommended Mitigations:</strong>
+                                    <ul style="margin-left: 1.25rem; margin-top: 0.25rem; line-height: 1.5;">
+                                        {{range .Mitigations}}
+                                        <li style="margin-bottom: 0.2rem;">{{.}}</li>
+                                        {{end}}
+                                    </ul>
+                                </div>
+                                {{end}}
+                            </div>
+                            {{end}}
+                        </div>
                     </div>
                 </details>
                 {{end}}
